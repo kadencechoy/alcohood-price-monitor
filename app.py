@@ -1,5 +1,6 @@
 import re
 import time
+import json
 import urllib.parse
 from datetime import datetime
 
@@ -9,15 +10,10 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 
-st.set_page_config(
-    page_title="Alcohood Competitor Price Radar",
-    layout="wide"
-)
+st.set_page_config(page_title="Alcohood Competitor Price Radar", layout="wide")
 
 st.title("🍾 Alcohood Competitor Price Radar")
-st.caption(
-    "Competitor Shop Search • Alcohood Price Check • Suggested Price • Action Needed"
-)
+st.caption("Competitor Website Search • Price Extraction • Alcohood Comparison • Suggested Price")
 
 
 COMPETITORS = {
@@ -33,26 +29,27 @@ COMPETITORS = {
 
 
 CATEGORIES = {
-    "Red wine": [
-        "opus one",
-        "penfolds bin 389",
-        "pinot noir",
-        "cabernet sauvignon",
-        "bourgogne rouge",
+    "Whisky": [
+        "macallan 12",
+        "yamazaki 12",
+        "hibiki harmony",
+        "nikka from the barrel",
+        "glenfiddich 12",
+        "ardbeg 10",
     ],
-    "White wine": [
-        "cloudy bay sauvignon blanc",
-        "chardonnay",
-        "sauvignon blanc",
-        "riesling",
-        "chablis",
+    "Sake": [
+        "dassai 45",
+        "kubota manju",
+        "hakkaisan",
+        "juyondai",
+        "born sake",
     ],
-    "Sparkling Wine": [
-        "prosecco",
-        "cava",
-        "freixenet",
-        "cremant",
-        "laurent perrier",
+    "Gin": [
+        "roku gin",
+        "hendricks gin",
+        "monkey 47",
+        "bombay sapphire",
+        "two moons gin",
     ],
     "Champagne": [
         "moet chandon brut",
@@ -62,125 +59,64 @@ CATEGORIES = {
         "bollinger",
         "krug",
     ],
-    "Sake": [
-        "dassai 45",
-        "kubota manju",
-        "kamoshibito kuheiji",
-        "hakkaisan",
-        "juyondai",
-        "born sake",
-    ],
-    "Whisky": [
-        "macallan 12",
-        "yamazaki 12",
-        "hibiki harmony",
-        "nikka from the barrel",
-        "glenfiddich 12",
-        "ardbeg 10",
-    ],
     "Cognac": [
         "hennessy vsop",
-        "martell cordon bleu",
-        "remy martin vsop",
         "hennessy xo",
+        "martell cordon bleu",
         "martell xo",
         "remy martin xo",
     ],
-    "Brandy": [
-        "torres 10",
-        "st remy xo",
-        "fundador brandy",
-        "cardenal mendoza",
-        "torres 20",
+    "Red wine": [
+        "opus one",
+        "penfolds bin 389",
+        "pinot noir",
+        "cabernet sauvignon",
     ],
-    "Gin": [
-        "roku gin",
-        "hendricks gin",
-        "two moons gin",
-        "nip gin",
-        "bombay sapphire",
-        "monkey 47",
+    "White wine": [
+        "cloudy bay sauvignon blanc",
+        "chardonnay",
+        "sauvignon blanc",
+        "riesling",
+    ],
+    "Sparkling Wine": [
+        "prosecco",
+        "cava",
+        "freixenet",
+        "cremant",
     ],
     "Tequila & Agave Spirits": [
         "don julio 1942",
         "casamigos reposado",
         "patron silver",
-        "818 tequila",
         "mezcal",
-        "codigo tequila",
     ],
     "Liqueur": [
         "baileys",
         "kahlua",
         "disaronno",
         "cointreau",
-        "malibu",
-        "sheridans",
     ],
     "Fruit Wine": [
-        "plum wine",
-        "umeshu",
         "choya umeshu",
+        "plum wine",
         "yuzu wine",
         "peach wine",
-        "lychee wine",
     ],
     "Baijiu": [
         "moutai",
         "wuliangye",
         "yanghe",
         "guojiao 1573",
-        "fenjiu",
-        "xijiu",
-    ],
-}
-
-
-TRENDING_PRODUCTS = {
-    "Whisky": [
-        "Yamazaki 12",
-        "Hibiki Harmony",
-        "Macallan 12",
-        "Macallan 18",
-        "Nikka From The Barrel",
-    ],
-    "Sake": [
-        "Dassai 45",
-        "Kubota Manju",
-        "Juyondai",
-        "Born Gold",
-        "Hakkaisan",
-    ],
-    "Gin": [
-        "Roku Gin",
-        "Hendricks Gin",
-        "Monkey 47",
-        "Bombay Sapphire",
-        "Two Moons Gin",
-    ],
-    "Champagne": [
-        "Moet Brut",
-        "Dom Perignon",
-        "Veuve Clicquot",
-        "Krug",
-        "Bollinger",
-    ],
-    "Cognac": [
-        "Hennessy VSOP",
-        "Hennessy XO",
-        "Martell XO",
-        "Remy Martin XO",
-        "Martell Cordon Bleu",
     ],
 }
 
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 Chrome/125 Safari/537.36"
     ),
-    "Accept-Language": "en-HK,en;q=0.9",
+    "Accept-Language": "en-HK,en;q=0.9,zh-HK;q=0.8",
 }
 
 
@@ -188,12 +124,9 @@ HEADERS = {
 def fetch(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
-
         if response.status_code == 200:
             return response.text
-
         return ""
-
     except Exception:
         return ""
 
@@ -204,22 +137,79 @@ def money_to_float(text):
 
     patterns = [
         r"(?:HK\$|HKD|\$)\s*([0-9][0-9,]*(?:\.\d+)?)",
-        r"([0-9][0-9,]*(?:\.\d+)?)\s*(?:HKD|港幣|元)",
+        r"([0-9][0-9,]*(?:\.\d+)?)\s*(?:HKD|港幣|港元)",
     ]
 
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
+    prices = []
 
-        if match:
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.I)
+        for match in matches:
             try:
-                return float(match.group(1).replace(",", ""))
+                price = float(match.replace(",", ""))
+                if 20 <= price <= 100000:
+                    prices.append(price)
             except Exception:
-                return None
+                pass
+
+    if not prices:
+        return None
+
+    return min(prices)
+
+
+def extract_price_from_json_ld(soup):
+    scripts = soup.find_all("script", type="application/ld+json")
+
+    for script in scripts:
+        try:
+            data = json.loads(script.string or "{}")
+
+            if isinstance(data, dict):
+                offers = data.get("offers")
+
+                if isinstance(offers, dict):
+                    price = offers.get("price")
+                    if price:
+                        return float(str(price).replace(",", ""))
+
+                if isinstance(offers, list):
+                    for offer in offers:
+                        price = offer.get("price")
+                        if price:
+                            return float(str(price).replace(",", ""))
+
+            if isinstance(data, list):
+                for item in data:
+                    offers = item.get("offers") if isinstance(item, dict) else None
+                    if isinstance(offers, dict) and offers.get("price"):
+                        return float(str(offers.get("price")).replace(",", ""))
+
+        except Exception:
+            continue
 
     return None
 
 
-def clean_google_url(href):
+def extract_page_info(url):
+    html = fetch(url)
+
+    if not html:
+        return None, "", ""
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    title = soup.title.string.strip() if soup.title and soup.title.string else url
+
+    json_price = extract_price_from_json_ld(soup)
+    text_price = money_to_float(soup.get_text(" ", strip=True))
+
+    price = json_price if json_price else text_price
+
+    return price, title, url
+
+
+def clean_search_result_url(href):
     if not href:
         return ""
 
@@ -228,48 +218,75 @@ def clean_google_url(href):
         query = urllib.parse.parse_qs(parsed.query)
         return query.get("q", [""])[0]
 
+    if href.startswith("//duckduckgo.com/l/?uddg="):
+        parsed = urllib.parse.urlparse("https:" + href)
+        query = urllib.parse.parse_qs(parsed.query)
+        return urllib.parse.unquote(query.get("uddg", [""])[0])
+
+    if "duckduckgo.com/l/?uddg=" in href:
+        parsed = urllib.parse.urlparse(href)
+        query = urllib.parse.parse_qs(parsed.query)
+        return urllib.parse.unquote(query.get("uddg", [""])[0])
+
     return href
 
 
-def google_site_search(query, domain, max_links=3):
-    search_query = f"site:{domain} {query} hong kong"
-    url = (
-        "https://www.google.com/search?hl=en-HK&gl=HK&q="
+def search_duckduckgo_site(product_query, domain, max_links=5):
+    search_query = f"site:{domain} {product_query}"
+    search_url = (
+        "https://duckduckgo.com/html/?q="
         + urllib.parse.quote(search_query)
     )
 
-    html = fetch(url)
+    html = fetch(search_url)
     soup = BeautifulSoup(html, "html.parser")
 
     links = []
 
-    for link_tag in soup.find_all("a", href=True):
-        href = clean_google_url(link_tag["href"])
+    for a in soup.find_all("a", href=True):
+        href = clean_search_result_url(a["href"])
 
         if domain in href and href.startswith("http"):
-            links.append(href)
+            if not any(skip in href.lower() for skip in ["cart", "login", "account", "checkout"]):
+                links.append(href)
 
-    unique_links = list(dict.fromkeys(links))
-
-    return unique_links[:max_links], url
+    return list(dict.fromkeys(links))[:max_links], search_url
 
 
-def extract_price_from_page(url):
-    html = fetch(url)
+def search_google_site(product_query, domain, max_links=5):
+    search_query = f"site:{domain} {product_query}"
+    search_url = (
+        "https://www.google.com/search?hl=en-HK&gl=HK&q="
+        + urllib.parse.quote(search_query)
+    )
 
-    if not html:
-        return None, ""
-
+    html = fetch(search_url)
     soup = BeautifulSoup(html, "html.parser")
-    text = soup.get_text(" ", strip=True)
-    price = money_to_float(text)
 
-    if soup.title and soup.title.string:
-        title = soup.title.string.strip()
-    else:
-        title = url
+    links = []
 
-    return price, title
+    for a in soup.find_all("a", href=True):
+        href = clean_search_result_url(a["href"])
+
+        if domain in href and href.startswith("http"):
+            if not any(skip in href.lower() for skip in ["cart", "login", "account", "checkout"]):
+                links.append(href)
+
+    return list(dict.fromkeys(links))[:max_links], search_url
+
+
+def search_site(product_query, domain, max_links=5):
+    links, search_url = search_duckduckgo_site(product_query, domain, max_links)
+
+    if links:
+        return links, search_url, "DuckDuckGo"
+
+    links, search_url = search_google_site(product_query, domain, max_links)
+
+    if links:
+        return links, search_url, "Google"
+
+    return [], search_url, "No search result"
 
 
 def competitor_search(product_query, selected_competitors):
@@ -278,16 +295,12 @@ def competitor_search(product_query, selected_competitors):
     for competitor_name in selected_competitors:
         domain = COMPETITORS[competitor_name]
 
-        links, search_url = google_site_search(
-            product_query,
-            domain,
-            max_links=3,
-        )
+        links, search_url, source = search_site(product_query, domain, max_links=5)
 
         best_result = None
 
         for link in links:
-            price, title = extract_price_from_page(link)
+            price, title, product_url = extract_page_info(link)
 
             if price:
                 best_result = {
@@ -295,7 +308,8 @@ def competitor_search(product_query, selected_competitors):
                     "competitor_domain": domain,
                     "competitor_title": title,
                     "competitor_price": price,
-                    "competitor_url": link,
+                    "competitor_url": product_url,
+                    "search_source": source,
                 }
                 break
 
@@ -309,40 +323,40 @@ def competitor_search(product_query, selected_competitors):
                     "competitor_title": "Not found",
                     "competitor_price": None,
                     "competitor_url": search_url,
+                    "search_source": source,
                 }
             )
 
-        time.sleep(0.5)
+        time.sleep(0.4)
 
     return results
 
 
 def alcohood_search(product_query):
-    links, search_url = google_site_search(
-        product_query,
-        "alcohood.com",
-        max_links=3,
-    )
+    links, search_url, source = search_site(product_query, "alcohood.com", max_links=5)
 
     for link in links:
-        price, title = extract_price_from_page(link)
+        price, title, product_url = extract_page_info(link)
 
         if price:
             return {
                 "alcohood_title": title,
                 "alcohood_price": price,
-                "alcohood_url": link,
+                "alcohood_url": product_url,
+                "alcohood_source": source,
             }
 
     return {
         "alcohood_title": "Not found",
         "alcohood_price": None,
         "alcohood_url": search_url,
+        "alcohood_source": source,
     }
 
 
 def build_report(selected_categories, selected_competitors, limit):
     rows = []
+    detail_rows = []
 
     for category in selected_categories:
         product_queries = CATEGORIES[category][:limit]
@@ -351,24 +365,30 @@ def build_report(selected_categories, selected_competitors, limit):
             own = alcohood_search(product_query)
             own_price = own.get("alcohood_price")
 
-            competitor_results = competitor_search(
-                product_query,
-                selected_competitors,
-            )
+            competitor_results = competitor_search(product_query, selected_competitors)
+
+            for competitor in competitor_results:
+                detail_rows.append(
+                    {
+                        "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "Category": category,
+                        "Product Search": product_query,
+                        "Competitor": competitor.get("competitor_name"),
+                        "Competitor Product": competitor.get("competitor_title"),
+                        "Competitor Price": competitor.get("competitor_price"),
+                        "Competitor URL": competitor.get("competitor_url"),
+                        "Search Source": competitor.get("search_source"),
+                    }
+                )
 
             valid_competitors = [
-                item
-                for item in competitor_results
-                if item.get("competitor_price")
+                item for item in competitor_results if item.get("competitor_price")
             ]
 
-            if valid_competitors:
-                cheapest = sorted(
-                    valid_competitors,
-                    key=lambda x: x["competitor_price"],
-                )[0]
-            else:
-                cheapest = {}
+            cheapest = sorted(
+                valid_competitors,
+                key=lambda x: x["competitor_price"],
+            )[0] if valid_competitors else {}
 
             competitor_price = cheapest.get("competitor_price")
             competitor_name = cheapest.get("competitor_name", "")
@@ -413,57 +433,9 @@ def build_report(selected_categories, selected_competitors, limit):
                 }
             )
 
-            time.sleep(1)
+            time.sleep(0.8)
 
-    return pd.DataFrame(rows)
-
-
-def build_competitor_detail_report(selected_categories, selected_competitors, limit):
-    rows = []
-
-    for category in selected_categories:
-        product_queries = CATEGORIES[category][:limit]
-
-        for product_query in product_queries:
-            competitor_results = competitor_search(
-                product_query,
-                selected_competitors,
-            )
-
-            for result in competitor_results:
-                rows.append(
-                    {
-                        "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "Category": category,
-                        "Product Search": product_query,
-                        "Competitor": result.get("competitor_name"),
-                        "Competitor Product": result.get("competitor_title"),
-                        "Competitor Price": result.get("competitor_price"),
-                        "Competitor URL": result.get("competitor_url"),
-                    }
-                )
-
-            time.sleep(1)
-
-    return pd.DataFrame(rows)
-
-
-def build_trending_products():
-    trend_rows = []
-
-    for category, products in TRENDING_PRODUCTS.items():
-        for rank, product in enumerate(products, start=1):
-            trend_rows.append(
-                {
-                    "Category": category,
-                    "Rank": rank,
-                    "Product": product,
-                    "Trend Score": max(100 - ((rank - 1) * 10), 50),
-                    "Search Term": f"{product} hong kong",
-                }
-            )
-
-    return pd.DataFrame(trend_rows)
+    return pd.DataFrame(rows), pd.DataFrame(detail_rows)
 
 
 with st.sidebar:
@@ -472,13 +444,7 @@ with st.sidebar:
     selected_categories = st.multiselect(
         "Categories",
         list(CATEGORIES.keys()),
-        default=[
-            "Whisky",
-            "Sake",
-            "Gin",
-            "Champagne",
-            "Cognac",
-        ],
+        default=["Whisky", "Sake", "Gin", "Champagne", "Cognac"],
     )
 
     selected_competitors = st.multiselect(
@@ -493,113 +459,39 @@ with st.sidebar:
         ],
     )
 
-    limit = st.slider(
-        "Products per category",
-        1,
-        6,
-        3,
-    )
+    limit = st.slider("Products per category", 1, 6, 3)
 
-    discover = st.button(
-        "🔥 Discover Trending Products"
-    )
-
-    run = st.button(
-        "Run competitor price radar",
-        type="primary",
-    )
+    run = st.button("Run competitor price radar", type="primary")
 
 
 st.info(
-    "This version searches selected competitor websites using Google site search, "
-    "then compares public product prices with Alcohood public pages. "
-    "If Google blocks the search or product pages hide prices, the result will show No Reliable Match."
+    "Fine-tuned version: it first searches competitor product pages using DuckDuckGo site search, "
+    "then falls back to Google site search. It also tries structured product price data before scanning page text."
 )
 
 
-if discover:
-    st.subheader("🔥 Trending Products Radar")
-
-    trend_df = build_trending_products()
-
-    st.dataframe(
-        trend_df,
-        use_container_width=True,
-    )
-
-    st.download_button(
-        "Download Trending Products CSV",
-        trend_df.to_csv(index=False).encode("utf-8-sig"),
-        "alcohood_trending_products.csv",
-        "text/csv",
-    )
-
-
 if run:
-    with st.spinner("Searching competitor shops and building dashboard..."):
-        df = build_report(
-            selected_categories,
-            selected_competitors,
-            limit,
-        )
-
-        detail_df = build_competitor_detail_report(
-            selected_categories,
-            selected_competitors,
-            limit,
-        )
+    with st.spinner("Searching competitor shops and extracting prices..."):
+        df, detail_df = build_report(selected_categories, selected_competitors, limit)
 
     st.success("Done")
 
     k1, k2, k3 = st.columns(3)
 
     k1.metric("Products Checked", len(df))
-    k2.metric(
-        "Price Opportunities",
-        int((df["Status"] == "🟠 Lower Price").sum()),
-    )
-    k3.metric(
-        "Potential New Listings",
-        int(df["Status"].str.contains("Consider", na=False).sum()),
-    )
+    k2.metric("Price Opportunities", int((df["Status"] == "🟠 Lower Price").sum()))
+    k3.metric("Potential New Listings", int(df["Status"].str.contains("Consider", na=False).sum()))
 
     st.subheader("Action Needed")
 
     action_needed = df[
-        df["Status"].isin(
-            [
-                "🟠 Lower Price",
-                "🟡 Consider Listing",
-                "🔴 No Reliable Match",
-            ]
-        )
+        df["Status"].isin(["🟠 Lower Price", "🟡 Consider Listing", "🔴 No Reliable Match"])
     ]
 
-    st.dataframe(
-        action_needed,
-        use_container_width=True,
-    )
-
-    st.markdown(
-        """
-        ### Status Guide
-
-        🟢 **Competitive** = Alcohood price is equal to or lower than the cheapest selected competitor.
-
-        🟡 **Consider Listing** = Competitor has a product but Alcohood product was not found.
-
-        🟠 **Lower Price** = Selected competitor appears cheaper. Suggested price = competitor price - HK$1.
-
-        🔴 **No Reliable Match** = Product match or price data is uncertain.
-        """
-    )
+    st.dataframe(action_needed, use_container_width=True)
 
     st.subheader("Full Dashboard")
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-    )
+    st.dataframe(df, use_container_width=True)
 
     st.download_button(
         "Download Main Dashboard CSV",
@@ -609,11 +501,7 @@ if run:
     )
 
     st.subheader("Competitor Detail Report")
-
-    st.dataframe(
-        detail_df,
-        use_container_width=True,
-    )
+    st.dataframe(detail_df, use_container_width=True)
 
     st.download_button(
         "Download Competitor Detail CSV",
@@ -623,10 +511,11 @@ if run:
     )
 
 else:
-    st.subheader("How to use")
+    st.subheader("How this searches")
     st.write(
-        "1. 左邊選酒類。 2. 選要監察的競爭對手。 "
-        "3. 可先按 🔥 Discover Trending Products。 "
-        "4. 按 Run competitor price radar 做比價。 "
-        "5. 下載 CSV 或直接睇 Action Needed。"
+        "1. Select categories and competitors. "
+        "2. The app searches product pages using DuckDuckGo site search first. "
+        "3. If no result is found, it tries Google site search. "
+        "4. It opens possible product pages and extracts HKD prices. "
+        "5. It compares the cheapest competitor price with Alcohood."
     )
