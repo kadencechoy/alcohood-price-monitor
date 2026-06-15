@@ -13,101 +13,34 @@ from bs4 import BeautifulSoup
 st.set_page_config(page_title="Alcohood Competitor Price Radar", layout="wide")
 
 st.title("🍾 Alcohood Competitor Price Radar")
-st.caption("Competitor Website Search • Price Extraction • Alcohood Comparison • Suggested Price")
+st.caption("Direct Competitor Search • Price Extraction • Alcohood Comparison • Suggested Price")
 
 
-COMPETITORS = {
-    "Watson's Wine": "watsonswine.com",
-    "Wine Couple": "winecouple.hk",
-    "Cellarmaster": "cellarmasterwines.com",
-    "MyiCellar": "myicellar.com",
-    "Ponti Wine Cellars": "pontiwinecellars.com.hk",
-    "RNG Wine": "rngwine.com",
-    "Onexcel Wine": "onexcel-wine.com",
-    "偉成洋酒": "waishingwine.com",
+COMPETITOR_SEARCH_URLS = {
+    "Watson's Wine": "https://www.watsonswine.com/en/search?text={query}&useDefaultSearch=false&brandRedirect=true",
+    "Wine Couple": "https://www.winecouple.hk/products?query={query}",
+    "Cellarmaster": "https://cellarmasterwines.com/search?q={query}&options%5Bprefix%5D=last",
+    "MyiCellar": "https://shop.myicellar.com/search?q={query}",
+    "Ponti Wine Cellars": "https://www.pontiwinecellars.com.hk/products?query={query}",
+    "RNG Wine": "https://www.rngwine.com/products?query={query}",
+    "Onexcel Wine": "https://www.onexcel-wine.com/ProductAdvanceSearch?ProductName={query}",
+    "偉成洋酒": "https://www.waishingwine.com.hk/products?query={query}",
 }
 
 
 CATEGORIES = {
-    "Whisky": [
-        "macallan 12",
-        "yamazaki 12",
-        "hibiki harmony",
-        "nikka from the barrel",
-        "glenfiddich 12",
-        "ardbeg 10",
-    ],
-    "Sake": [
-        "dassai 45",
-        "kubota manju",
-        "hakkaisan",
-        "juyondai",
-        "born sake",
-    ],
-    "Gin": [
-        "roku gin",
-        "hendricks gin",
-        "monkey 47",
-        "bombay sapphire",
-        "two moons gin",
-    ],
-    "Champagne": [
-        "moet chandon brut",
-        "veuve clicquot",
-        "dom perignon",
-        "perrier jouet",
-        "bollinger",
-        "krug",
-    ],
-    "Cognac": [
-        "hennessy vsop",
-        "hennessy xo",
-        "martell cordon bleu",
-        "martell xo",
-        "remy martin xo",
-    ],
-    "Red wine": [
-        "opus one",
-        "penfolds bin 389",
-        "pinot noir",
-        "cabernet sauvignon",
-    ],
-    "White wine": [
-        "cloudy bay sauvignon blanc",
-        "chardonnay",
-        "sauvignon blanc",
-        "riesling",
-    ],
-    "Sparkling Wine": [
-        "prosecco",
-        "cava",
-        "freixenet",
-        "cremant",
-    ],
-    "Tequila & Agave Spirits": [
-        "don julio 1942",
-        "casamigos reposado",
-        "patron silver",
-        "mezcal",
-    ],
-    "Liqueur": [
-        "baileys",
-        "kahlua",
-        "disaronno",
-        "cointreau",
-    ],
-    "Fruit Wine": [
-        "choya umeshu",
-        "plum wine",
-        "yuzu wine",
-        "peach wine",
-    ],
-    "Baijiu": [
-        "moutai",
-        "wuliangye",
-        "yanghe",
-        "guojiao 1573",
-    ],
+    "Whisky": ["macallan 12", "yamazaki 12", "hibiki harmony", "nikka from the barrel", "glenfiddich 12", "ardbeg 10"],
+    "Sake": ["dassai 45", "kubota manju", "hakkaisan", "juyondai", "born sake"],
+    "Gin": ["roku gin", "hendricks gin", "monkey 47", "bombay sapphire", "two moons gin"],
+    "Champagne": ["moet chandon brut", "veuve clicquot", "dom perignon", "perrier jouet", "bollinger", "krug"],
+    "Cognac": ["hennessy vsop", "hennessy xo", "martell cordon bleu", "martell xo", "remy martin xo"],
+    "Red wine": ["opus one", "penfolds bin 389", "pinot noir", "cabernet sauvignon"],
+    "White wine": ["cloudy bay sauvignon blanc", "chardonnay", "sauvignon blanc", "riesling"],
+    "Sparkling Wine": ["prosecco", "cava", "freixenet", "cremant"],
+    "Tequila & Agave Spirits": ["don julio 1942", "casamigos reposado", "patron silver", "mezcal"],
+    "Liqueur": ["baileys", "kahlua", "disaronno", "cointreau"],
+    "Fruit Wine": ["choya umeshu", "plum wine", "yuzu wine", "peach wine"],
+    "Baijiu": ["moutai", "wuliangye", "yanghe", "guojiao 1573"],
 }
 
 
@@ -123,12 +56,17 @@ HEADERS = {
 @st.cache_data(ttl=3600)
 def fetch(url):
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        response = requests.get(url, headers=HEADERS, timeout=20)
         if response.status_code == 200:
             return response.text
         return ""
     except Exception:
         return ""
+
+
+def build_search_url(template, query):
+    encoded_query = urllib.parse.quote(query)
+    return template.replace("{query}", encoded_query)
 
 
 def money_to_float(text):
@@ -158,15 +96,20 @@ def money_to_float(text):
     return min(prices)
 
 
-def extract_price_from_json_ld(soup):
+def extract_json_ld_price(soup):
     scripts = soup.find_all("script", type="application/ld+json")
 
     for script in scripts:
         try:
             data = json.loads(script.string or "{}")
 
-            if isinstance(data, dict):
-                offers = data.get("offers")
+            items = data if isinstance(data, list) else [data]
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+
+                offers = item.get("offers")
 
                 if isinstance(offers, dict):
                     price = offers.get("price")
@@ -179,29 +122,45 @@ def extract_price_from_json_ld(soup):
                         if price:
                             return float(str(price).replace(",", ""))
 
-            if isinstance(data, list):
-                for item in data:
-                    offers = item.get("offers") if isinstance(item, dict) else None
-                    if isinstance(offers, dict) and offers.get("price"):
-                        return float(str(offers.get("price")).replace(",", ""))
-
         except Exception:
             continue
 
     return None
 
 
+def extract_links_from_search_page(html, base_url):
+    soup = BeautifulSoup(html, "html.parser")
+    links = []
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+
+        if href.startswith("/"):
+            parsed_base = urllib.parse.urlparse(base_url)
+            href = f"{parsed_base.scheme}://{parsed_base.netloc}{href}"
+
+        if href.startswith("http"):
+            lowered = href.lower()
+
+            if any(skip in lowered for skip in ["cart", "checkout", "account", "login", "register", "wishlist"]):
+                continue
+
+            links.append(href)
+
+    return list(dict.fromkeys(links))[:8]
+
+
 def extract_page_info(url):
     html = fetch(url)
 
     if not html:
-        return None, "", ""
+        return None, "", url
 
     soup = BeautifulSoup(html, "html.parser")
 
     title = soup.title.string.strip() if soup.title and soup.title.string else url
 
-    json_price = extract_price_from_json_ld(soup)
+    json_price = extract_json_ld_price(soup)
     text_price = money_to_float(soup.get_text(" ", strip=True))
 
     price = json_price if json_price else text_price
@@ -209,133 +168,77 @@ def extract_page_info(url):
     return price, title, url
 
 
-def clean_search_result_url(href):
-    if not href:
-        return ""
-
-    if href.startswith("/url?q="):
-        parsed = urllib.parse.urlparse(href)
-        query = urllib.parse.parse_qs(parsed.query)
-        return query.get("q", [""])[0]
-
-    if href.startswith("//duckduckgo.com/l/?uddg="):
-        parsed = urllib.parse.urlparse("https:" + href)
-        query = urllib.parse.parse_qs(parsed.query)
-        return urllib.parse.unquote(query.get("uddg", [""])[0])
-
-    if "duckduckgo.com/l/?uddg=" in href:
-        parsed = urllib.parse.urlparse(href)
-        query = urllib.parse.parse_qs(parsed.query)
-        return urllib.parse.unquote(query.get("uddg", [""])[0])
-
-    return href
-
-
-def search_duckduckgo_site(product_query, domain, max_links=5):
-    search_query = f"site:{domain} {product_query}"
-    search_url = (
-        "https://duckduckgo.com/html/?q="
-        + urllib.parse.quote(search_query)
-    )
+def search_competitor_product(product_query, competitor_name):
+    search_template = COMPETITOR_SEARCH_URLS[competitor_name]
+    search_url = build_search_url(search_template, product_query)
 
     html = fetch(search_url)
-    soup = BeautifulSoup(html, "html.parser")
 
-    links = []
+    if not html:
+        return {
+            "competitor_name": competitor_name,
+            "competitor_title": "Search page blocked / no response",
+            "competitor_price": None,
+            "competitor_url": search_url,
+        }
 
-    for a in soup.find_all("a", href=True):
-        href = clean_search_result_url(a["href"])
+    search_price = money_to_float(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
 
-        if domain in href and href.startswith("http"):
-            if not any(skip in href.lower() for skip in ["cart", "login", "account", "checkout"]):
-                links.append(href)
+    links = extract_links_from_search_page(html, search_url)
 
-    return list(dict.fromkeys(links))[:max_links], search_url
+    best_result = None
 
+    for link in links:
+        price, title, product_url = extract_page_info(link)
 
-def search_google_site(product_query, domain, max_links=5):
-    search_query = f"site:{domain} {product_query}"
-    search_url = (
-        "https://www.google.com/search?hl=en-HK&gl=HK&q="
-        + urllib.parse.quote(search_query)
-    )
+        if price:
+            best_result = {
+                "competitor_name": competitor_name,
+                "competitor_title": title,
+                "competitor_price": price,
+                "competitor_url": product_url,
+            }
+            break
 
-    html = fetch(search_url)
-    soup = BeautifulSoup(html, "html.parser")
+    if best_result:
+        return best_result
 
-    links = []
+    if search_price:
+        return {
+            "competitor_name": competitor_name,
+            "competitor_title": "Price found on search results page",
+            "competitor_price": search_price,
+            "competitor_url": search_url,
+        }
 
-    for a in soup.find_all("a", href=True):
-        href = clean_search_result_url(a["href"])
-
-        if domain in href and href.startswith("http"):
-            if not any(skip in href.lower() for skip in ["cart", "login", "account", "checkout"]):
-                links.append(href)
-
-    return list(dict.fromkeys(links))[:max_links], search_url
-
-
-def search_site(product_query, domain, max_links=5):
-    links, search_url = search_duckduckgo_site(product_query, domain, max_links)
-
-    if links:
-        return links, search_url, "DuckDuckGo"
-
-    links, search_url = search_google_site(product_query, domain, max_links)
-
-    if links:
-        return links, search_url, "Google"
-
-    return [], search_url, "No search result"
-
-
-def competitor_search(product_query, selected_competitors):
-    results = []
-
-    for competitor_name in selected_competitors:
-        domain = COMPETITORS[competitor_name]
-
-        links, search_url, source = search_site(product_query, domain, max_links=5)
-
-        best_result = None
-
-        for link in links:
-            price, title, product_url = extract_page_info(link)
-
-            if price:
-                best_result = {
-                    "competitor_name": competitor_name,
-                    "competitor_domain": domain,
-                    "competitor_title": title,
-                    "competitor_price": price,
-                    "competitor_url": product_url,
-                    "search_source": source,
-                }
-                break
-
-        if best_result:
-            results.append(best_result)
-        else:
-            results.append(
-                {
-                    "competitor_name": competitor_name,
-                    "competitor_domain": domain,
-                    "competitor_title": "Not found",
-                    "competitor_price": None,
-                    "competitor_url": search_url,
-                    "search_source": source,
-                }
-            )
-
-        time.sleep(0.4)
-
-    return results
+    return {
+        "competitor_name": competitor_name,
+        "competitor_title": "Not found",
+        "competitor_price": None,
+        "competitor_url": search_url,
+    }
 
 
 def alcohood_search(product_query):
-    links, search_url, source = search_site(product_query, "alcohood.com", max_links=5)
+    search_url = f"https://www.alcohood.com/search?q={urllib.parse.quote(product_query)}"
+
+    html = fetch(search_url)
+
+    if not html:
+        return {
+            "alcohood_title": "Search page blocked / no response",
+            "alcohood_price": None,
+            "alcohood_url": search_url,
+        }
+
+    search_price = money_to_float(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+
+    links = extract_links_from_search_page(html, search_url)
 
     for link in links:
+        if "alcohood.com" not in link:
+            continue
+
         price, title, product_url = extract_page_info(link)
 
         if price:
@@ -343,19 +246,24 @@ def alcohood_search(product_query):
                 "alcohood_title": title,
                 "alcohood_price": price,
                 "alcohood_url": product_url,
-                "alcohood_source": source,
             }
+
+    if search_price:
+        return {
+            "alcohood_title": "Price found on Alcohood search results page",
+            "alcohood_price": search_price,
+            "alcohood_url": search_url,
+        }
 
     return {
         "alcohood_title": "Not found",
         "alcohood_price": None,
         "alcohood_url": search_url,
-        "alcohood_source": source,
     }
 
 
 def build_report(selected_categories, selected_competitors, limit):
-    rows = []
+    main_rows = []
     detail_rows = []
 
     for category in selected_categories:
@@ -365,21 +273,25 @@ def build_report(selected_categories, selected_competitors, limit):
             own = alcohood_search(product_query)
             own_price = own.get("alcohood_price")
 
-            competitor_results = competitor_search(product_query, selected_competitors)
+            competitor_results = []
 
-            for competitor in competitor_results:
+            for competitor_name in selected_competitors:
+                result = search_competitor_product(product_query, competitor_name)
+                competitor_results.append(result)
+
                 detail_rows.append(
                     {
                         "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "Category": category,
                         "Product Search": product_query,
-                        "Competitor": competitor.get("competitor_name"),
-                        "Competitor Product": competitor.get("competitor_title"),
-                        "Competitor Price": competitor.get("competitor_price"),
-                        "Competitor URL": competitor.get("competitor_url"),
-                        "Search Source": competitor.get("search_source"),
+                        "Competitor": result.get("competitor_name"),
+                        "Competitor Product": result.get("competitor_title"),
+                        "Competitor Price": result.get("competitor_price"),
+                        "Competitor URL": result.get("competitor_url"),
                     }
                 )
+
+                time.sleep(0.5)
 
             valid_competitors = [
                 item for item in competitor_results if item.get("competitor_price")
@@ -415,7 +327,7 @@ def build_report(selected_categories, selected_competitors, limit):
                 suggested_price = ""
                 status = "🔴 No Reliable Match"
 
-            rows.append(
+            main_rows.append(
                 {
                     "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "Category": category,
@@ -433,9 +345,9 @@ def build_report(selected_categories, selected_competitors, limit):
                 }
             )
 
-            time.sleep(0.8)
+            time.sleep(0.5)
 
-    return pd.DataFrame(rows), pd.DataFrame(detail_rows)
+    return pd.DataFrame(main_rows), pd.DataFrame(detail_rows)
 
 
 with st.sidebar:
@@ -449,7 +361,7 @@ with st.sidebar:
 
     selected_competitors = st.multiselect(
         "Competitors",
-        list(COMPETITORS.keys()),
+        list(COMPETITOR_SEARCH_URLS.keys()),
         default=[
             "Watson's Wine",
             "Wine Couple",
@@ -461,17 +373,17 @@ with st.sidebar:
 
     limit = st.slider("Products per category", 1, 6, 3)
 
-    run = st.button("Run competitor price radar", type="primary")
+    run = st.button("Run direct competitor search", type="primary")
 
 
 st.info(
-    "Fine-tuned version: it first searches competitor product pages using DuckDuckGo site search, "
-    "then falls back to Google site search. It also tries structured product price data before scanning page text."
+    "This version uses each competitor's own search URL instead of Google Shopping. "
+    "It opens search result pages, extracts product links and prices, then compares with Alcohood."
 )
 
 
 if run:
-    with st.spinner("Searching competitor shops and extracting prices..."):
+    with st.spinner("Searching competitor websites directly and extracting prices..."):
         df, detail_df = build_report(selected_categories, selected_competitors, limit)
 
     st.success("Done")
@@ -483,12 +395,10 @@ if run:
     k3.metric("Potential New Listings", int(df["Status"].str.contains("Consider", na=False).sum()))
 
     st.subheader("Action Needed")
-
-    action_needed = df[
-        df["Status"].isin(["🟠 Lower Price", "🟡 Consider Listing", "🔴 No Reliable Match"])
-    ]
-
-    st.dataframe(action_needed, use_container_width=True)
+    st.dataframe(
+        df[df["Status"].isin(["🟠 Lower Price", "🟡 Consider Listing", "🔴 No Reliable Match"])],
+        use_container_width=True,
+    )
 
     st.subheader("Full Dashboard")
     st.dataframe(df, use_container_width=True)
@@ -514,8 +424,8 @@ else:
     st.subheader("How this searches")
     st.write(
         "1. Select categories and competitors. "
-        "2. The app searches product pages using DuckDuckGo site search first. "
-        "3. If no result is found, it tries Google site search. "
-        "4. It opens possible product pages and extracts HKD prices. "
-        "5. It compares the cheapest competitor price with Alcohood."
+        "2. The app opens each competitor's own search URL. "
+        "3. It scans search results and product pages for HKD prices. "
+        "4. It compares the cheapest competitor price with Alcohood. "
+        "5. If Alcohood is more expensive, suggested price = competitor price - HK$1."
     )
