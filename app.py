@@ -44,31 +44,18 @@ st.title("🍾 Alcohood AI Demand & Pricing Agent")
 st.caption("Google Ads Search Terms • Browser Agent Search • AI Product Extraction • Pricing Action")
 
 
-# =========================
-# OpenAI
-# =========================
-
 def get_openai_client():
     api_key = os.environ.get("OPENAI_API_KEY")
-
     if not api_key:
         try:
             api_key = st.secrets.get("OPENAI_API_KEY")
         except Exception:
             api_key = None
-
-    if not api_key:
-        return None
-
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key) if api_key else None
 
 
 client = get_openai_client()
 
-
-# =========================
-# Browser Search Config
-# =========================
 
 BROWSER_SEARCH_FUNCTIONS = {
     "Watson's Wine": search_watsons,
@@ -99,10 +86,6 @@ HEADERS = {
 }
 
 
-# =========================
-# Helpers
-# =========================
-
 def build_search_url(template, query):
     return template.replace("{query}", urllib.parse.quote_plus(str(query)))
 
@@ -119,12 +102,10 @@ def fetch(url):
 def safe_json_loads(text):
     if not text:
         return {}
-
     try:
         return json.loads(text)
     except Exception:
         pass
-
     try:
         start = text.find("{")
         end = text.rfind("}") + 1
@@ -136,14 +117,10 @@ def safe_json_loads(text):
 def clean_number(value):
     if pd.isna(value):
         return 0
-
-    text = str(value)
-    text = text.replace(",", "").replace("HK$", "").replace("$", "").replace("%", "").strip()
+    text = str(value).replace(",", "").replace("HK$", "").replace("$", "").replace("%", "").strip()
     match = re.search(r"-?\d+(?:\.\d+)?", text)
-
     if not match:
         return 0
-
     try:
         return float(match.group(0))
     except Exception:
@@ -153,22 +130,17 @@ def clean_number(value):
 def html_to_clean_text(html, max_chars=12000):
     if not html:
         return ""
-
     soup = BeautifulSoup(html, "html.parser")
-
     for tag in soup(["script", "style", "noscript", "svg"]):
         tag.extract()
-
     text = soup.get_text(" ", strip=True)
     text = re.sub(r"\s+", " ", text)
-
     return text[:max_chars]
 
 
 def extract_links_from_html(html, base_url=None, allowed_domain=None, max_links=20):
     soup = BeautifulSoup(html or "", "html.parser")
     links = []
-
     parsed_base = urllib.parse.urlparse(base_url) if base_url else None
     base_domain = parsed_base.netloc if parsed_base else ""
 
@@ -198,10 +170,6 @@ def extract_links_from_html(html, base_url=None, allowed_domain=None, max_links=
     return list(dict.fromkeys(links))[:max_links]
 
 
-# =========================
-# CSV Reader
-# =========================
-
 def find_column(df, possible_names):
     lower_map = {str(col).lower().strip(): col for col in df.columns}
 
@@ -220,13 +188,11 @@ def find_column(df, possible_names):
 
 def smart_read_uploaded_text(uploaded_file):
     raw = uploaded_file.getvalue()
-
     for enc in ["utf-8-sig", "utf-8", "big5", "cp950", "latin1"]:
         try:
             return raw.decode(enc)
         except Exception:
             continue
-
     return raw.decode("utf-8", errors="ignore")
 
 
@@ -305,10 +271,6 @@ def load_google_ads_csv(uploaded_file):
 
     return clean_df
 
-
-# =========================
-# AI Functions
-# =========================
 
 def ai_classify_search_term(term):
     if client is None:
@@ -534,10 +496,6 @@ Return JSON only:
         }
 
 
-# =========================
-# Browser Search
-# =========================
-
 def get_browser_html(site_name, product_query):
     func = BROWSER_SEARCH_FUNCTIONS.get(site_name)
 
@@ -644,13 +602,8 @@ def extract_alcohood_product(product_query):
     }
 
 
-# =========================
-# Report Builders
-# =========================
-
 def classify_ads_terms(ads_df, max_terms):
     rows = []
-
     working_df = ads_df.sort_values(by="Clicks", ascending=False).head(max_terms)
 
     for _, row in working_df.iterrows():
@@ -681,7 +634,11 @@ def build_browser_price_radar(product_df, selected_competitors):
         product_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
     ]
 
-    for _, row in product_rows.iterrows():
+    total = len(product_rows)
+    progress = st.progress(0)
+    status_box = st.empty()
+
+    for index, (_, row) in enumerate(product_rows.iterrows(), start=1):
         search_term = row["Search Term"]
 
         if row["AI Type"] == "PRODUCT" and row["Normalized Product"]:
@@ -689,12 +646,16 @@ def build_browser_price_radar(product_df, selected_competitors):
         else:
             product_query = search_term
 
+        status_box.info(f"Searching {index}/{total}: {product_query}")
+
         alcohood_result = extract_alcohood_product(product_query)
         alcohood_price = alcohood_result.get("price")
 
         competitor_results = []
 
         for competitor_name in selected_competitors:
+            status_box.info(f"Searching {index}/{total}: {product_query} on {competitor_name}")
+
             result = extract_site_product(competitor_name, product_query)
             competitor_results.append(result)
 
@@ -812,28 +773,21 @@ def build_browser_price_radar(product_df, selected_competitors):
             "AI Suggested Price": ai_match.get("ai_suggested_price"),
         })
 
-        time.sleep(0.3)
+        progress.progress(index / total)
 
+    status_box.success("Browser search completed.")
     return pd.DataFrame(main_rows), pd.DataFrame(detail_rows)
 
-
-# =========================
-# Sidebar
-# =========================
 
 with st.sidebar:
     st.header("Settings")
 
-    uploaded_file = st.file_uploader(
-        "Upload Google Ads Search Terms CSV",
-        type=["csv", "txt"],
-    )
+    uploaded_file = st.file_uploader("Upload Google Ads Search Terms CSV", type=["csv", "txt"])
 
     selected_competitors = st.multiselect(
         "Competitors",
         list(BROWSER_SEARCH_FUNCTIONS.keys()),
         default=[
-            "Watson's Wine",
             "Wine Couple",
             "Cellarmaster",
             "MyiCellar",
@@ -849,10 +803,6 @@ with st.sidebar:
     test_browser = st.button("Test Browser Agent")
     test_watsons = st.button("Test Watson's Wine Search")
 
-
-# =========================
-# Main UI
-# =========================
 
 st.info(
     "This version uses a real browser via Playwright on Render, then uses OpenAI to extract the best matching product, price, and link from rendered website pages."
@@ -906,33 +856,19 @@ if uploaded_file:
         st.dataframe(ads_df.head(60), width="stretch")
 
         if run_classification:
-            st.success("Analyse button clicked.")
+            st.success("✅ Analyse button clicked.")
 
             with st.spinner("AI is classifying Google Ads search terms..."):
                 classified_df = classify_ads_terms(ads_df, max_terms)
 
             st.session_state["classified_df"] = classified_df
-            st.success("AI classification completed.")
+            st.success("✅ AI classification completed.")
 
         if "classified_df" in st.session_state:
             classified_df = st.session_state["classified_df"]
 
             st.subheader("AI Search Term Classification")
             st.dataframe(classified_df, width="stretch")
-
-            st.download_button(
-                "Download AI Classification CSV",
-                classified_df.to_csv(index=False).encode("utf-8-sig"),
-                "alcohood_google_ads_ai_classification.csv",
-                "text/csv",
-            )
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("PRODUCT", int((classified_df["AI Type"] == "PRODUCT").sum()))
-            c2.metric("BRAND", int((classified_df["AI Type"] == "BRAND").sum()))
-            c3.metric("COMPETITOR", int((classified_df["AI Type"] == "COMPETITOR").sum()))
-            c4.metric("GENERIC", int((classified_df["AI Type"] == "GENERIC").sum()))
-            c5.metric("IGNORE", int((classified_df["AI Type"] == "IGNORE").sum()))
 
             product_terms_df = classified_df[
                 classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
@@ -942,31 +878,46 @@ if uploaded_file:
             st.dataframe(product_terms_df, width="stretch")
 
         if run_price_radar:
-            st.success("Price Radar button clicked.")
+            st.success("✅ Price Radar button clicked.")
+            st.write("Session keys:", list(st.session_state.keys()))
 
             if "classified_df" not in st.session_state:
-                st.error("Please click 1️⃣ Analyse Google Ads Terms first.")
+                st.error("❌ Please click 1️⃣ Analyse Google Ads Terms first.")
                 st.stop()
 
             classified_df = st.session_state["classified_df"]
+
+            st.write("Classified rows:", len(classified_df))
+            st.dataframe(classified_df, width="stretch")
 
             product_terms_df = classified_df[
                 classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
             ]
 
+            st.write("Product terms selected:", len(product_terms_df))
+            st.dataframe(product_terms_df, width="stretch")
+
             if product_terms_df.empty:
                 st.warning("No PRODUCT / BRAND / GENERIC terms found to search.")
                 st.stop()
 
-            with st.spinner("Browser Agent is searching competitor websites and OpenAI is extracting prices..."):
+            st.warning("Starting browser search now. This may take 1–5 minutes.")
+
+            try:
                 radar_df, detail_df = build_browser_price_radar(
                     product_terms_df,
                     selected_competitors,
                 )
 
-            st.session_state["radar_df"] = radar_df
-            st.session_state["detail_df"] = detail_df
-            st.success("Browser AI Price Radar completed.")
+                st.session_state["radar_df"] = radar_df
+                st.session_state["detail_df"] = detail_df
+
+                st.success("✅ Browser AI Price Radar completed.")
+
+            except Exception as error:
+                st.error(f"❌ Price Radar failed: {error}")
+                st.exception(error)
+                st.stop()
 
         if "radar_df" in st.session_state:
             radar_df = st.session_state["radar_df"]
