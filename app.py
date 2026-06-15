@@ -19,7 +19,7 @@ st.set_page_config(
 
 st.title("🍾 Alcohood AI Demand & Pricing Radar")
 st.caption(
-    "Google Ads Search Terms • AI Product Discovery • Competitor Price Check • Listing Opportunity"
+    "Google Ads Search Terms • AI Product Discovery • Product Page Filtering • Competitor Price Check"
 )
 
 
@@ -64,6 +64,75 @@ HEADERS = {
 }
 
 
+BAD_URL_KEYWORDS = [
+    "delivery",
+    "shipping",
+    "cart",
+    "checkout",
+    "account",
+    "login",
+    "register",
+    "wishlist",
+    "pages",
+    "page/",
+    "blogs",
+    "blog",
+    "news",
+    "promotion",
+    "promotions",
+    "events",
+    "service",
+    "membership",
+    "terms",
+    "privacy",
+    "contact",
+    "about",
+    "faq",
+    "collection/all",
+    "collections/all",
+    "collections",
+    "category",
+    "categories",
+]
+
+
+GOOD_URL_KEYWORDS = [
+    "/products/",
+    "/product/",
+    "/goodsdetail/",
+    "/goodsDetail/",
+    "/item/",
+    "/p/",
+]
+
+
+STOPWORDS = {
+    "hong",
+    "kong",
+    "hk",
+    "hkd",
+    "price",
+    "wine",
+    "whisky",
+    "whiskey",
+    "sake",
+    "gin",
+    "champagne",
+    "cognac",
+    "brandy",
+    "tequila",
+    "liqueur",
+    "online",
+    "shop",
+    "buy",
+    "700ml",
+    "720ml",
+    "750ml",
+    "1000ml",
+    "1l",
+}
+
+
 # =========================
 # Web Helpers
 # =========================
@@ -84,6 +153,70 @@ def fetch(url):
 
 def build_search_url(template, query):
     return template.replace("{query}", urllib.parse.quote_plus(str(query)))
+
+
+def normalize_text(text):
+    if not text:
+        return ""
+
+    text = str(text).lower()
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+def important_tokens(query):
+    text = normalize_text(query)
+    tokens = []
+
+    for token in text.split():
+        if token in STOPWORDS:
+            continue
+
+        if len(token) <= 1:
+            continue
+
+        tokens.append(token)
+
+    return tokens
+
+
+def product_name_match_score(query, title, url=""):
+    tokens = important_tokens(query)
+
+    if not tokens:
+        return 0
+
+    combined = normalize_text(f"{title} {url}")
+    matched = 0
+
+    for token in tokens:
+        if token in combined:
+            matched += 1
+
+    return matched / len(tokens)
+
+
+def is_bad_url(url):
+    lowered = str(url).lower()
+
+    return any(
+        keyword.lower() in lowered
+        for keyword in BAD_URL_KEYWORDS
+    )
+
+
+def is_likely_product_url(url):
+    lowered = str(url).lower()
+
+    if is_bad_url(lowered):
+        return False
+
+    return any(
+        keyword.lower() in lowered
+        for keyword in GOOD_URL_KEYWORDS
+    )
 
 
 def money_to_float(text):
@@ -142,6 +275,31 @@ def extract_json_ld_price(soup):
     return None
 
 
+def extract_meta_title(soup, fallback_url):
+    title_candidates = []
+
+    if soup.title and soup.title.string:
+        title_candidates.append(soup.title.string.strip())
+
+    meta_properties = [
+        ("property", "og:title"),
+        ("name", "title"),
+        ("property", "twitter:title"),
+    ]
+
+    for attr, value in meta_properties:
+        tag = soup.find("meta", attrs={attr: value})
+
+        if tag and tag.get("content"):
+            title_candidates.append(tag.get("content").strip())
+
+    for title in title_candidates:
+        if title:
+            return title
+
+    return fallback_url
+
+
 def extract_links_from_search_page(html, base_url, allowed_domain=None):
     soup = BeautifulSoup(html, "html.parser")
     parsed_base = urllib.parse.urlparse(base_url)
@@ -159,75 +317,112 @@ def extract_links_from_search_page(html, base_url, allowed_domain=None):
 
         lowered = href.lower()
 
-        if any(
-            skip in lowered
-            for skip in [
-                "cart",
-                "checkout",
-                "account",
-                "login",
-                "register",
-                "wishlist",
-                "facebook",
-                "instagram",
-                "whatsapp",
-                "mailto",
-                "tel:",
-            ]
-        ):
+        if allowed_domain and allowed_domain not in lowered:
             continue
 
-        if allowed_domain and allowed_domain not in lowered:
+        if is_bad_url(lowered):
             continue
 
         links.append(href)
 
-    return list(dict.fromkeys(links))[:10]
+    unique_links = list(dict.fromkeys(links))
+
+    product_links = [
+        link for link in unique_links
+        if is_likely_product_url(link)
+    ]
+
+    if product_links:
+        return product_links[:10]
+
+    return unique_links[:10]
 
 
-def extract_page_info(url):
+def extract_page_info(url, product_query=None):
     html = fetch(url)
 
     if not html:
-        return None, "", url
+        return {
+            "price": None,
+            "title": "",
+            "url": url,
+            "match_score": 0,
+            "valid_product_page": False,
+            "reason": "No response",
+        }
 
     soup = BeautifulSoup(html, "html.parser")
-
-    title = (
-        soup.title.string.strip()
-        if soup.title and soup.title.string
-        else url
-    )
+    title = extract_meta_title(soup, url)
+    page_text = soup.get_text(" ", strip=True)
 
     json_price = extract_json_ld_price(soup)
-    text_price = money_to_float(
-        soup.get_text(" ", strip=True)
-    )
-
+    text_price = money_to_float(page_text)
     price = json_price if json_price else text_price
 
-    return price, title, url
+    match_score = product_name_match_score(
+        product_query or "",
+        title,
+        url,
+    )
+
+    valid_product_page = is_likely_product_url(url)
+
+    if product_query:
+        if match_score < 0.5:
+            return {
+                "price": None,
+                "title": title,
+                "url": url,
+                "match_score": match_score,
+                "valid_product_page": valid_product_page,
+                "reason": "Product name does not match search term",
+            }
+
+    if not valid_product_page:
+        return {
+            "price": None,
+            "title": title,
+            "url": url,
+            "match_score": match_score,
+            "valid_product_page": False,
+            "reason": "Not a valid product URL",
+        }
+
+    if not price:
+        return {
+            "price": None,
+            "title": title,
+            "url": url,
+            "match_score": match_score,
+            "valid_product_page": valid_product_page,
+            "reason": "No price found on product page",
+        }
+
+    return {
+        "price": price,
+        "title": title,
+        "url": url,
+        "match_score": match_score,
+        "valid_product_page": valid_product_page,
+        "reason": "Valid product price found",
+    }
 
 
 def search_product_from_site(product_query, search_template, allowed_domain=None):
-    search_url = build_search_url(
-        search_template,
-        product_query,
-    )
-
+    search_url = build_search_url(search_template, product_query)
     html = fetch(search_url)
+
+    debug_rows = []
 
     if not html:
         return {
             "title": "Search page blocked / no response",
             "price": None,
             "url": search_url,
+            "match_score": 0,
+            "reason": "Search page blocked / no response",
+            "debug": debug_rows,
         }
-
-    soup = BeautifulSoup(html, "html.parser")
-    search_price = money_to_float(
-        soup.get_text(" ", strip=True)
-    )
 
     links = extract_links_from_search_page(
         html,
@@ -235,27 +430,44 @@ def search_product_from_site(product_query, search_template, allowed_domain=None
         allowed_domain=allowed_domain,
     )
 
+    best_valid = None
+
     for link in links:
-        price, title, product_url = extract_page_info(link)
+        result = extract_page_info(
+            link,
+            product_query=product_query,
+        )
 
-        if price:
-            return {
-                "title": title,
-                "price": price,
-                "url": product_url,
-            }
+        debug_rows.append({
+            "Candidate URL": link,
+            "Title": result.get("title"),
+            "Price": result.get("price"),
+            "Match Score": result.get("match_score"),
+            "Valid Product Page": result.get("valid_product_page"),
+            "Reason": result.get("reason"),
+        })
 
-    if search_price:
+        if result.get("price"):
+            best_valid = result
+            break
+
+    if best_valid:
         return {
-            "title": "Price found on search results page",
-            "price": search_price,
-            "url": search_url,
+            "title": best_valid["title"],
+            "price": best_valid["price"],
+            "url": best_valid["url"],
+            "match_score": best_valid["match_score"],
+            "reason": best_valid["reason"],
+            "debug": debug_rows,
         }
 
     return {
         "title": "Not found",
         "price": None,
         "url": search_url,
+        "match_score": 0,
+        "reason": "No valid product price found",
+        "debug": debug_rows,
     }
 
 
@@ -270,6 +482,9 @@ def alcohood_search(product_query):
         "alcohood_title": result["title"],
         "alcohood_price": result["price"],
         "alcohood_url": result["url"],
+        "alcohood_match_score": result["match_score"],
+        "alcohood_reason": result["reason"],
+        "debug": result["debug"],
     }
 
 
@@ -288,6 +503,9 @@ def search_competitor_product(product_query, competitor_name):
         "competitor_title": result["title"],
         "competitor_price": result["price"],
         "competitor_url": result["url"],
+        "competitor_match_score": result["match_score"],
+        "competitor_reason": result["reason"],
+        "debug": result["debug"],
     }
 
 
@@ -531,10 +749,7 @@ def smart_read_uploaded_text(uploaded_file):
         except Exception:
             continue
 
-    return raw.decode(
-        "utf-8",
-        errors="ignore",
-    )
+    return raw.decode("utf-8", errors="ignore")
 
 
 def detect_header_index(lines):
@@ -756,6 +971,7 @@ def classify_ads_terms(ads_df, max_terms):
 def build_price_radar(product_df, selected_competitors):
     main_rows = []
     detail_rows = []
+    debug_rows = []
 
     product_rows = product_df[
         product_df["AI Type"].isin(
@@ -778,6 +994,14 @@ def build_price_radar(product_df, selected_competitors):
         own = alcohood_search(product_query)
         own_price = own.get("alcohood_price")
 
+        for debug in own.get("debug", []):
+            debug_rows.append({
+                "Site": "Alcohood",
+                "Search Term": search_term,
+                "Product Query": product_query,
+                **debug,
+            })
+
         competitor_results = []
 
         for competitor_name in selected_competitors:
@@ -788,6 +1012,14 @@ def build_price_radar(product_df, selected_competitors):
 
             competitor_results.append(result)
 
+            for debug in result.get("debug", []):
+                debug_rows.append({
+                    "Site": competitor_name,
+                    "Search Term": search_term,
+                    "Product Query": product_query,
+                    **debug,
+                })
+
             detail_rows.append(
                 {
                     "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -797,6 +1029,8 @@ def build_price_radar(product_df, selected_competitors):
                     "Competitor Product": result.get("competitor_title"),
                     "Competitor Price": result.get("competitor_price"),
                     "Competitor URL": result.get("competitor_url"),
+                    "Match Score": result.get("competitor_match_score"),
+                    "Reason": result.get("competitor_reason"),
                 }
             )
 
@@ -876,6 +1110,8 @@ def build_price_radar(product_df, selected_competitors):
                 "Alcohood Product": own.get("alcohood_title"),
                 "Alcohood Price": own_price,
                 "Alcohood URL": own.get("alcohood_url"),
+                "Alcohood Match Score": own.get("alcohood_match_score"),
+                "Alcohood Reason": own.get("alcohood_reason"),
                 "Cheapest Competitor": competitor_name,
                 "Competitor Product": competitor_title,
                 "Competitor Price": competitor_price,
@@ -893,7 +1129,11 @@ def build_price_radar(product_df, selected_competitors):
 
         time.sleep(0.4)
 
-    return pd.DataFrame(main_rows), pd.DataFrame(detail_rows)
+    return (
+        pd.DataFrame(main_rows),
+        pd.DataFrame(detail_rows),
+        pd.DataFrame(debug_rows),
+    )
 
 
 # =========================
@@ -950,7 +1190,7 @@ with st.sidebar:
 
 st.info(
     "Upload your Google Ads Search Terms CSV. AI will classify real customer searches into PRODUCT, BRAND, COMPETITOR, GENERIC, or IGNORE. "
-    "Then the dashboard checks whether Alcohood sells the product, compares competitor prices, and highlights price actions or listing opportunities."
+    "This version filters out non-product pages such as delivery, shipping, collections, blog, and cart pages before using any price."
 )
 
 
@@ -1053,18 +1293,20 @@ if uploaded_file:
             )
 
             if run_price_radar:
-                with st.spinner("Searching Alcohood and competitors..."):
-                    radar_df, detail_df = build_price_radar(
+                with st.spinner("Searching Alcohood and competitors with product-page filtering..."):
+                    radar_df, detail_df, debug_df = build_price_radar(
                         product_terms_df,
                         selected_competitors,
                     )
 
                 st.session_state["radar_df"] = radar_df
                 st.session_state["detail_df"] = detail_df
+                st.session_state["debug_df"] = debug_df
 
         if "radar_df" in st.session_state:
             radar_df = st.session_state["radar_df"]
             detail_df = st.session_state["detail_df"]
+            debug_df = st.session_state["debug_df"]
 
             st.success("Price & Listing Radar completed")
 
@@ -1139,6 +1381,23 @@ if uploaded_file:
                 "text/csv",
             )
 
+            st.subheader("Debug: Candidate Pages Checked")
+            st.caption(
+                "Use this table to see why a page was rejected, e.g. not product URL, no price found, or product name mismatch."
+            )
+
+            st.dataframe(
+                debug_df,
+                width="stretch",
+            )
+
+            st.download_button(
+                "Download Debug CSV",
+                debug_df.to_csv(index=False).encode("utf-8-sig"),
+                "alcohood_debug_candidate_pages.csv",
+                "text/csv",
+            )
+
 else:
     st.subheader("How to use")
     st.write(
@@ -1147,5 +1406,5 @@ else:
         "3. Click 1️⃣ Analyse Google Ads Terms. "
         "4. Review AI classification. "
         "5. Click 2️⃣ Run Price & Listing Radar. "
-        "6. Check Price Actions and Listing Opportunities."
+        "6. Check Price Actions, Listing Opportunities, and Debug table."
     )
