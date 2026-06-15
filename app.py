@@ -1,6 +1,7 @@
 import re
 import time
 import json
+import os
 import urllib.parse
 from io import StringIO
 from datetime import datetime
@@ -12,20 +13,55 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 
 
+try:
+    from browser_agent import (
+        browser_test,
+        search_watsons,
+        search_winecouple,
+        search_cellarmaster,
+        search_myicellar,
+        search_ponti,
+        search_rng,
+        search_onexcel,
+        search_waishing,
+        search_alcohood,
+    )
+except Exception:
+    browser_test = None
+    search_watsons = None
+    search_winecouple = None
+    search_cellarmaster = None
+    search_myicellar = None
+    search_ponti = None
+    search_rng = None
+    search_onexcel = None
+    search_waishing = None
+    search_alcohood = None
+
+
 st.set_page_config(
-    page_title="Alcohood AI Demand & Pricing Radar",
+    page_title="Alcohood AI Demand & Pricing Agent",
     layout="wide"
 )
 
-st.title("🍾 Alcohood AI Demand & Pricing Radar")
+st.title("🍾 Alcohood AI Demand & Pricing Agent")
 st.caption(
-    "Google Ads Search Terms • AI Product Discovery • Product Page Filtering • Competitor Price Check"
+    "Google Ads Search Terms • Browser Agent Search • AI Product Extraction • SKU Matching • Pricing Action"
 )
 
 
 def get_openai_client():
     try:
-        return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+        if not api_key:
+            api_key = st.secrets.get("OPENAI_API_KEY")
+
+        if not api_key:
+            return None
+
+        return OpenAI(api_key=api_key)
+
     except Exception:
         return None
 
@@ -33,9 +69,19 @@ def get_openai_client():
 client = get_openai_client()
 
 
-ALCOHOOD_SEARCH_TEMPLATE = "https://www.alcohood.com/search?q={query}"
+BROWSER_SEARCH_FUNCTIONS = {
+    "Watson's Wine": search_watsons,
+    "Wine Couple": search_winecouple,
+    "Cellarmaster": search_cellarmaster,
+    "MyiCellar": search_myicellar,
+    "Ponti Wine Cellars": search_ponti,
+    "RNG Wine": search_rng,
+    "Onexcel Wine": search_onexcel,
+    "偉成洋酒": search_waishing,
+}
 
-COMPETITOR_SEARCH_URLS = {
+
+FALLBACK_SEARCH_URLS = {
     "Watson's Wine": "https://www.watsonswine.com/en/search?text={query}&useDefaultSearch=false&brandRedirect=true",
     "Wine Couple": "https://www.winecouple.hk/products?query={query}",
     "Cellarmaster": "https://cellarmasterwines.com/search?q={query}&options%5Bprefix%5D=last",
@@ -44,6 +90,7 @@ COMPETITOR_SEARCH_URLS = {
     "RNG Wine": "https://www.rngwine.com/products?query={query}",
     "Onexcel Wine": "https://www.onexcel-wine.com/ProductAdvanceSearch?ProductName={query}",
     "偉成洋酒": "https://www.waishingwine.com.hk/products?query={query}",
+    "Alcohood": "https://www.alcohood.com/search?q={query}",
 }
 
 
@@ -56,70 +103,12 @@ HEADERS = {
 }
 
 
-BAD_URL_KEYWORDS = [
-    "delivery",
-    "shipping",
-    "cart",
-    "checkout",
-    "account",
-    "login",
-    "register",
-    "wishlist",
-    "pages",
-    "page/",
-    "blogs",
-    "blog",
-    "news",
-    "promotion",
-    "promotions",
-    "events",
-    "service",
-    "membership",
-    "terms",
-    "privacy",
-    "contact",
-    "about",
-    "faq",
-    "collection/all",
-    "collections/all",
-]
+# =========================
+# Basic Helpers
+# =========================
 
-
-GOOD_URL_KEYWORDS = [
-    "/products/",
-    "/product/",
-    "/goodsdetail/",
-    "/goodsDetail/",
-    "/item/",
-    "/p/",
-]
-
-
-STOPWORDS = {
-    "hong",
-    "kong",
-    "hk",
-    "hkd",
-    "price",
-    "wine",
-    "whisky",
-    "whiskey",
-    "sake",
-    "gin",
-    "champagne",
-    "cognac",
-    "brandy",
-    "tequila",
-    "liqueur",
-    "online",
-    "shop",
-    "buy",
-    "700ml",
-    "720ml",
-    "750ml",
-    "1000ml",
-    "1l",
-}
+def build_search_url(template, query):
+    return template.replace("{query}", urllib.parse.quote_plus(str(query)))
 
 
 @st.cache_data(ttl=3600)
@@ -133,62 +122,43 @@ def fetch(url):
         return ""
 
 
-def build_search_url(template, query):
-    return template.replace("{query}", urllib.parse.quote_plus(str(query)))
-
-
-def normalize_text(text):
+def safe_json_loads(text):
     if not text:
-        return ""
+        return {}
 
-    text = str(text).lower()
-    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
 
-
-def important_tokens(query):
-    text = normalize_text(query)
-    tokens = []
-
-    for token in text.split():
-        if token in STOPWORDS:
-            continue
-        if len(token) <= 1:
-            continue
-        tokens.append(token)
-
-    return tokens
+    try:
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        return json.loads(text[start:end])
+    except Exception:
+        return {}
 
 
-def product_name_match_score(query, title, url=""):
-    tokens = important_tokens(query)
-
-    if not tokens:
+def clean_number(value):
+    if pd.isna(value):
         return 0
 
-    combined = normalize_text(f"{title} {url}")
-    matched = 0
+    text = str(value)
+    text = text.replace(",", "")
+    text = text.replace("HK$", "")
+    text = text.replace("$", "")
+    text = text.replace("%", "")
+    text = text.strip()
 
-    for token in tokens:
-        if token in combined:
-            matched += 1
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
 
-    return matched / len(tokens)
+    if not match:
+        return 0
 
-
-def is_bad_url(url):
-    lowered = str(url).lower()
-    return any(keyword.lower() in lowered for keyword in BAD_URL_KEYWORDS)
-
-
-def is_likely_product_url(url):
-    lowered = str(url).lower()
-
-    if is_bad_url(lowered):
-        return False
-
-    return any(keyword.lower() in lowered for keyword in GOOD_URL_KEYWORDS)
+    try:
+        return float(match.group(0))
+    except Exception:
+        return 0
 
 
 def money_to_float(text):
@@ -214,68 +184,32 @@ def money_to_float(text):
     return min(prices) if prices else None
 
 
-def extract_json_ld_price(soup):
-    scripts = soup.find_all("script", type="application/ld+json")
+def html_to_clean_text(html, max_chars=12000):
+    if not html:
+        return ""
 
-    for script in scripts:
-        try:
-            data = json.loads(script.string or "{}")
-            items = data if isinstance(data, list) else [data]
-
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-
-                offers = item.get("offers")
-
-                if isinstance(offers, dict) and offers.get("price"):
-                    return float(str(offers.get("price")).replace(",", ""))
-
-                if isinstance(offers, list):
-                    for offer in offers:
-                        if offer.get("price"):
-                            return float(str(offer.get("price")).replace(",", ""))
-
-        except Exception:
-            continue
-
-    return None
-
-
-def extract_meta_title(soup, fallback_url):
-    title_candidates = []
-
-    if soup.title and soup.title.string:
-        title_candidates.append(soup.title.string.strip())
-
-    meta_properties = [
-        ("property", "og:title"),
-        ("name", "title"),
-        ("property", "twitter:title"),
-    ]
-
-    for attr, value in meta_properties:
-        tag = soup.find("meta", attrs={attr: value})
-        if tag and tag.get("content"):
-            title_candidates.append(tag.get("content").strip())
-
-    for title in title_candidates:
-        if title:
-            return title
-
-    return fallback_url
-
-
-def extract_links_from_search_page(html, base_url, allowed_domain=None):
     soup = BeautifulSoup(html, "html.parser")
-    parsed_base = urllib.parse.urlparse(base_url)
-    base_domain = parsed_base.netloc
+
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.extract()
+
+    text = soup.get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", text)
+
+    return text[:max_chars]
+
+
+def extract_links_from_html(html, base_url=None, allowed_domain=None, max_links=20):
+    soup = BeautifulSoup(html or "", "html.parser")
     links = []
+
+    parsed_base = urllib.parse.urlparse(base_url) if base_url else None
+    base_domain = parsed_base.netloc if parsed_base else ""
 
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
-        if href.startswith("/"):
+        if href.startswith("/") and parsed_base:
             href = f"{parsed_base.scheme}://{base_domain}{href}"
 
         if not href.startswith("http"):
@@ -286,373 +220,27 @@ def extract_links_from_search_page(html, base_url, allowed_domain=None):
         if allowed_domain and allowed_domain not in lowered:
             continue
 
-        if is_bad_url(lowered):
+        if any(skip in lowered for skip in [
+            "cart", "checkout", "account", "login", "register",
+            "wishlist", "facebook", "instagram", "whatsapp",
+            "mailto", "tel:", "privacy", "terms"
+        ]):
             continue
 
         links.append(href)
 
-    unique_links = list(dict.fromkeys(links))
-
-    product_links = [
-        link for link in unique_links
-        if is_likely_product_url(link)
-    ]
-
-    if product_links:
-        return product_links[:10]
-
-    return unique_links[:10]
+    return list(dict.fromkeys(links))[:max_links]
 
 
-def extract_page_info(url, product_query=None):
-    html = fetch(url)
-
-    if not html:
-        return {
-            "price": None,
-            "title": "",
-            "url": url,
-            "match_score": 0,
-            "valid_product_page": False,
-            "reason": "No response",
-        }
-
-    soup = BeautifulSoup(html, "html.parser")
-    title = extract_meta_title(soup, url)
-    page_text = soup.get_text(" ", strip=True)
-
-    json_price = extract_json_ld_price(soup)
-    text_price = money_to_float(page_text)
-    price = json_price if json_price else text_price
-
-    match_score = product_name_match_score(product_query or "", title, url)
-    valid_product_page = is_likely_product_url(url)
-
-    if product_query and match_score < 0.5:
-        return {
-            "price": None,
-            "title": title,
-            "url": url,
-            "match_score": match_score,
-            "valid_product_page": valid_product_page,
-            "reason": "Product name does not match search term",
-        }
-
-    if not valid_product_page:
-        return {
-            "price": None,
-            "title": title,
-            "url": url,
-            "match_score": match_score,
-            "valid_product_page": False,
-            "reason": "Not a valid product URL",
-        }
-
-    if not price:
-        return {
-            "price": None,
-            "title": title,
-            "url": url,
-            "match_score": match_score,
-            "valid_product_page": valid_product_page,
-            "reason": "No price found on product page",
-        }
-
-    return {
-        "price": price,
-        "title": title,
-        "url": url,
-        "match_score": match_score,
-        "valid_product_page": valid_product_page,
-        "reason": "Valid product price found",
-    }
-
-
-def search_product_from_site(product_query, search_template, allowed_domain=None):
-    search_url = build_search_url(search_template, product_query)
-    html = fetch(search_url)
-    debug_rows = []
-
-    if not html:
-        return {
-            "title": "Search page blocked / no response",
-            "price": None,
-            "url": search_url,
-            "match_score": 0,
-            "reason": "Search page blocked / no response",
-            "debug": debug_rows,
-        }
-
-    links = extract_links_from_search_page(
-        html,
-        search_url,
-        allowed_domain=allowed_domain,
-    )
-
-    best_valid = None
-
-    for link in links:
-        result = extract_page_info(
-            link,
-            product_query=product_query,
-        )
-
-        debug_rows.append(
-            {
-                "Candidate URL": link,
-                "Title": result.get("title"),
-                "Price": result.get("price"),
-                "Match Score": result.get("match_score"),
-                "Valid Product Page": result.get("valid_product_page"),
-                "Reason": result.get("reason"),
-            }
-        )
-
-        if result.get("price"):
-            best_valid = result
-            break
-
-    if best_valid:
-        return {
-            "title": best_valid["title"],
-            "price": best_valid["price"],
-            "url": best_valid["url"],
-            "match_score": best_valid["match_score"],
-            "reason": best_valid["reason"],
-            "debug": debug_rows,
-        }
-
-    return {
-        "title": "Not found",
-        "price": None,
-        "url": search_url,
-        "match_score": 0,
-        "reason": "No valid product price found",
-        "debug": debug_rows,
-    }
-
-
-def alcohood_search(product_query):
-    result = search_product_from_site(
-        product_query,
-        ALCOHOOD_SEARCH_TEMPLATE,
-        allowed_domain="alcohood.com",
-    )
-
-    return {
-        "alcohood_title": result["title"],
-        "alcohood_price": result["price"],
-        "alcohood_url": result["url"],
-        "alcohood_match_score": result["match_score"],
-        "alcohood_reason": result["reason"],
-        "debug": result["debug"],
-    }
-
-
-def search_competitor_product(product_query, competitor_name):
-    template = COMPETITOR_SEARCH_URLS[competitor_name]
-    domain = urllib.parse.urlparse(template).netloc.lower()
-
-    result = search_product_from_site(
-        product_query,
-        template,
-        allowed_domain=domain,
-    )
-
-    return {
-        "competitor_name": competitor_name,
-        "competitor_title": result["title"],
-        "competitor_price": result["price"],
-        "competitor_url": result["url"],
-        "competitor_match_score": result["match_score"],
-        "competitor_reason": result["reason"],
-        "debug": result["debug"],
-    }
-
-
-def safe_json_loads(text):
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-
-    try:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        return json.loads(text[start:end])
-    except Exception:
-        return {}
-
-
-def ai_classify_search_term(term):
-    if client is None:
-        return {
-            "type": "API_NOT_CONNECTED",
-            "normalized_product": "",
-            "category": "",
-            "reason": "OpenAI API is not connected.",
-        }
-
-    prompt = f"""
-You are an alcohol e-commerce analyst for Alcohood Hong Kong.
-
-Classify this Google Ads search term.
-
-Search term:
-{term}
-
-Classification options:
-- PRODUCT: specific sellable alcohol product, e.g. Macallan 12, Dassai 45, Hennessy XO
-- BRAND: brand only, e.g. Macallan, Hennessy, Dassai
-- COMPETITOR: shop name or competitor name, e.g. Watson Wine, Wine Couple
-- GENERIC: broad category, e.g. red wine, sake, whisky, champagne
-- IGNORE: unrelated or too vague
-
-Return JSON only:
-{{
-  "type": "PRODUCT",
-  "normalized_product": "Macallan 12",
-  "category": "Whisky",
-  "reason": "Specific product search"
-}}
-"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-
-        data = safe_json_loads(response.choices[0].message.content)
-
-        return {
-            "type": data.get("type", "IGNORE"),
-            "normalized_product": data.get("normalized_product", ""),
-            "category": data.get("category", ""),
-            "reason": data.get("reason", ""),
-        }
-
-    except Exception as error:
-        return {
-            "type": "AI_ERROR",
-            "normalized_product": "",
-            "category": "",
-            "reason": str(error),
-        }
-
-
-def ai_sku_match(
-    search_term,
-    alcohood_name,
-    alcohood_price,
-    competitor_name,
-    competitor_product,
-    competitor_price,
-):
-    if client is None:
-        return {
-            "same_sku": False,
-            "confidence": 0,
-            "reason": "OpenAI API is not connected.",
-            "ai_action": "API Not Connected",
-            "ai_suggested_price": None,
-        }
-
-    if not alcohood_price or not competitor_price:
-        return {
-            "same_sku": False,
-            "confidence": 0,
-            "reason": "Missing Alcohood or competitor price.",
-            "ai_action": "Manual Review",
-            "ai_suggested_price": None,
-        }
-
-    prompt = f"""
-You are an alcohol e-commerce pricing analyst for Alcohood Hong Kong.
-
-Decide whether the Alcohood product and competitor product are the SAME SKU.
-
-Check:
-- brand
-- product name
-- category
-- age statement
-- edition, e.g. Double Cask / Sherry Oak
-- bottle size, e.g. 700ml / 720ml / 750ml / 1L
-- vintage for wine/champagne
-- sake grade
-- cognac grade
-
-Search term:
-{search_term}
-
-Alcohood:
-{alcohood_name}
-Price: HK${alcohood_price}
-
-Competitor:
-{competitor_name}
-{competitor_product}
-Price: HK${competitor_price}
-
-Rule:
-If same SKU and Alcohood is more expensive, suggested price = competitor price - 1.
-If not same SKU or confidence below 80, action = Manual Review.
-
-Return JSON only:
-{{
-  "same_sku": true,
-  "confidence": 95,
-  "reason": "Same product, same age and edition.",
-  "ai_action": "Lower Price",
-  "ai_suggested_price": 667
-}}
-"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-
-        data = safe_json_loads(response.choices[0].message.content)
-
-        same_sku = bool(data.get("same_sku", False))
-        confidence = int(data.get("confidence", 0) or 0)
-
-        if same_sku and confidence >= 80:
-            if alcohood_price > competitor_price:
-                ai_action = "Lower Price"
-                ai_suggested_price = competitor_price - 1
-            else:
-                ai_action = "Competitive"
-                ai_suggested_price = alcohood_price
-        else:
-            ai_action = "Manual Review"
-            ai_suggested_price = None
-
-        return {
-            "same_sku": same_sku,
-            "confidence": confidence,
-            "reason": data.get("reason", ""),
-            "ai_action": ai_action,
-            "ai_suggested_price": ai_suggested_price,
-        }
-
-    except Exception as error:
-        return {
-            "same_sku": False,
-            "confidence": 0,
-            "reason": f"AI error: {error}",
-            "ai_action": "AI Error",
-            "ai_suggested_price": None,
-        }
-
+# =========================
+# Google Ads CSV Handling
+# =========================
 
 def find_column(df, possible_names):
-    lower_map = {str(col).lower().strip(): col for col in df.columns}
+    lower_map = {
+        str(col).lower().strip(): col
+        for col in df.columns
+    }
 
     for name in possible_names:
         if name.lower() in lower_map:
@@ -742,28 +330,6 @@ def read_table_from_text(text):
             continue
 
     return pd.DataFrame()
-
-
-def clean_number(value):
-    if pd.isna(value):
-        return 0
-
-    text = str(value)
-    text = text.replace(",", "")
-    text = text.replace("HK$", "")
-    text = text.replace("$", "")
-    text = text.replace("%", "")
-    text = text.strip()
-
-    number_match = re.search(r"-?\d+(?:\.\d+)?", text)
-
-    if not number_match:
-        return 0
-
-    try:
-        return float(number_match.group(0))
-    except Exception:
-        return 0
 
 
 def load_google_ads_csv(uploaded_file):
@@ -859,10 +425,421 @@ def load_google_ads_csv(uploaded_file):
     return clean_df
 
 
+# =========================
+# AI Logic
+# =========================
+
+def ai_classify_search_term(term):
+    if client is None:
+        return {
+            "type": "API_NOT_CONNECTED",
+            "normalized_product": "",
+            "category": "",
+            "reason": "OpenAI API is not connected.",
+        }
+
+    prompt = f"""
+You are an alcohol e-commerce analyst for Alcohood Hong Kong.
+
+Classify this Google Ads search term.
+
+Search term:
+{term}
+
+Classification options:
+- PRODUCT: specific sellable alcohol product, e.g. Macallan 12, Dassai 45, Hennessy XO
+- BRAND: brand only, e.g. Macallan, Hennessy, Dassai
+- COMPETITOR: shop name or competitor name, e.g. Watson Wine, Wine Couple
+- GENERIC: broad category, e.g. red wine, sake, whisky, champagne
+- IGNORE: unrelated or too vague
+
+Return JSON only:
+{{
+  "type": "PRODUCT",
+  "normalized_product": "Macallan 12",
+  "category": "Whisky",
+  "reason": "Specific product search"
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0,
+        )
+
+        data = safe_json_loads(response.choices[0].message.content)
+
+        return {
+            "type": data.get("type", "IGNORE"),
+            "normalized_product": data.get("normalized_product", ""),
+            "category": data.get("category", ""),
+            "reason": data.get("reason", ""),
+        }
+
+    except Exception as error:
+        return {
+            "type": "AI_ERROR",
+            "normalized_product": "",
+            "category": "",
+            "reason": str(error),
+        }
+
+
+def ai_extract_product_from_page(search_term, site_name, page_text, candidate_links):
+    if client is None:
+        return {
+            "found": False,
+            "product_name": "",
+            "price": None,
+            "currency": "",
+            "url": "",
+            "confidence": 0,
+            "reason": "OpenAI API is not connected.",
+        }
+
+    prompt = f"""
+You are an alcohol ecommerce research agent.
+
+Task:
+From the rendered website text below, find the best matching alcohol product for the search term.
+
+Search term:
+{search_term}
+
+Website:
+{site_name}
+
+Rules:
+- Only return a result if it is a real product listing.
+- Do not use delivery fee, shipping fee, membership fee, event fee, deposit, or coupon value as product price.
+- Prefer exact SKU match.
+- Check brand, age statement, edition, bottle size, vintage, grade.
+- If the page does not clearly show a matching product and price, return found=false.
+- Price must be in HKD if possible.
+- Use candidate links only if they seem related to the product.
+
+Rendered page text:
+{page_text[:10000]}
+
+Candidate links:
+{candidate_links[:20]}
+
+Return JSON only:
+{{
+  "found": true,
+  "product_name": "The Macallan 12 Years Old Double Cask 700ml",
+  "price": 497,
+  "currency": "HKD",
+  "url": "https://example.com/product-url",
+  "confidence": 92,
+  "reason": "Best visible matching product with HKD price"
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0,
+        )
+
+        data = safe_json_loads(response.choices[0].message.content)
+
+        return {
+            "found": bool(data.get("found", False)),
+            "product_name": data.get("product_name", ""),
+            "price": data.get("price"),
+            "currency": data.get("currency", ""),
+            "url": data.get("url", ""),
+            "confidence": data.get("confidence", 0),
+            "reason": data.get("reason", ""),
+        }
+
+    except Exception as error:
+        return {
+            "found": False,
+            "product_name": "",
+            "price": None,
+            "currency": "",
+            "url": "",
+            "confidence": 0,
+            "reason": f"AI extraction error: {error}",
+        }
+
+
+def ai_sku_match(
+    search_term,
+    alcohood_name,
+    alcohood_price,
+    competitor_name,
+    competitor_product,
+    competitor_price,
+):
+    if client is None:
+        return {
+            "same_sku": False,
+            "confidence": 0,
+            "reason": "OpenAI API is not connected.",
+            "ai_action": "API Not Connected",
+            "ai_suggested_price": None,
+        }
+
+    if not alcohood_price or not competitor_price:
+        return {
+            "same_sku": False,
+            "confidence": 0,
+            "reason": "Missing Alcohood or competitor price.",
+            "ai_action": "Manual Review",
+            "ai_suggested_price": None,
+        }
+
+    prompt = f"""
+You are an alcohol e-commerce pricing analyst for Alcohood Hong Kong.
+
+Decide whether the Alcohood product and competitor product are the SAME SKU.
+
+Check:
+- brand
+- product name
+- category
+- age statement
+- edition, e.g. Double Cask / Sherry Oak
+- bottle size, e.g. 700ml / 720ml / 750ml / 1L
+- vintage for wine/champagne
+- sake grade
+- cognac grade
+
+Search term:
+{search_term}
+
+Alcohood:
+{alcohood_name}
+Price: HK${alcohood_price}
+
+Competitor:
+{competitor_name}
+{competitor_product}
+Price: HK${competitor_price}
+
+Rule:
+If same SKU and Alcohood is more expensive, suggested price = competitor price - 1.
+If not same SKU or confidence below 80, action = Manual Review.
+
+Return JSON only:
+{{
+  "same_sku": true,
+  "confidence": 95,
+  "reason": "Same product, same age and edition.",
+  "ai_action": "Lower Price",
+  "ai_suggested_price": 667
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0,
+        )
+
+        data = safe_json_loads(response.choices[0].message.content)
+
+        same_sku = bool(data.get("same_sku", False))
+        confidence = int(data.get("confidence", 0) or 0)
+
+        if same_sku and confidence >= 80:
+            if float(alcohood_price) > float(competitor_price):
+                ai_action = "Lower Price"
+                ai_suggested_price = float(competitor_price) - 1
+            else:
+                ai_action = "Competitive"
+                ai_suggested_price = float(alcohood_price)
+        else:
+            ai_action = "Manual Review"
+            ai_suggested_price = None
+
+        return {
+            "same_sku": same_sku,
+            "confidence": confidence,
+            "reason": data.get("reason", ""),
+            "ai_action": ai_action,
+            "ai_suggested_price": ai_suggested_price,
+        }
+
+    except Exception as error:
+        return {
+            "same_sku": False,
+            "confidence": 0,
+            "reason": f"AI error: {error}",
+            "ai_action": "AI Error",
+            "ai_suggested_price": None,
+        }
+
+
+# =========================
+# Browser Search Agent
+# =========================
+
+def get_rendered_html_for_site(site_name, product_query):
+    search_func = BROWSER_SEARCH_FUNCTIONS.get(site_name)
+
+    if search_func is None:
+        return ""
+
+    try:
+        return search_func(product_query)
+    except Exception as error:
+        return f"__BROWSER_ERROR__: {error}"
+
+
+def fallback_fetch_html(site_name, product_query):
+    template = FALLBACK_SEARCH_URLS.get(site_name)
+
+    if not template:
+        return ""
+
+    url = build_search_url(template, product_query)
+    return fetch(url)
+
+
+def extract_site_product(site_name, product_query):
+    html = get_rendered_html_for_site(site_name, product_query)
+    method = "Playwright Browser"
+
+    if not html or html.startswith("__BROWSER_ERROR__"):
+        error_msg = html
+        html = fallback_fetch_html(site_name, product_query)
+        method = f"Fallback requests after browser error: {error_msg}"
+
+    search_url = build_search_url(
+        FALLBACK_SEARCH_URLS.get(site_name, ""),
+        product_query,
+    )
+
+    page_text = html_to_clean_text(html)
+    candidate_links = extract_links_from_html(
+        html,
+        base_url=search_url,
+    )
+
+    ai_result = ai_extract_product_from_page(
+        product_query,
+        site_name,
+        page_text,
+        candidate_links,
+    )
+
+    price = ai_result.get("price")
+
+    try:
+        if price is not None and price != "":
+            price = float(str(price).replace(",", ""))
+        else:
+            price = None
+    except Exception:
+        price = None
+
+    return {
+        "site": site_name,
+        "method": method,
+        "found": ai_result.get("found"),
+        "product_name": ai_result.get("product_name"),
+        "price": price,
+        "currency": ai_result.get("currency"),
+        "url": ai_result.get("url") or search_url,
+        "confidence": ai_result.get("confidence"),
+        "reason": ai_result.get("reason"),
+        "page_text_preview": page_text[:1000],
+    }
+
+
+def extract_alcohood_product(product_query):
+    html = ""
+
+    if search_alcohood:
+        try:
+            html = search_alcohood(product_query)
+        except Exception as error:
+            html = f"__BROWSER_ERROR__: {error}"
+
+    method = "Playwright Browser"
+
+    if not html or html.startswith("__BROWSER_ERROR__"):
+        error_msg = html
+        html = fallback_fetch_html("Alcohood", product_query)
+        method = f"Fallback requests after browser error: {error_msg}"
+
+    search_url = build_search_url(
+        FALLBACK_SEARCH_URLS.get("Alcohood", ""),
+        product_query,
+    )
+
+    page_text = html_to_clean_text(html)
+    candidate_links = extract_links_from_html(
+        html,
+        base_url=search_url,
+        allowed_domain="alcohood.com",
+    )
+
+    ai_result = ai_extract_product_from_page(
+        product_query,
+        "Alcohood",
+        page_text,
+        candidate_links,
+    )
+
+    price = ai_result.get("price")
+
+    try:
+        if price is not None and price != "":
+            price = float(str(price).replace(",", ""))
+        else:
+            price = None
+    except Exception:
+        price = None
+
+    return {
+        "site": "Alcohood",
+        "method": method,
+        "found": ai_result.get("found"),
+        "product_name": ai_result.get("product_name"),
+        "price": price,
+        "currency": ai_result.get("currency"),
+        "url": ai_result.get("url") or search_url,
+        "confidence": ai_result.get("confidence"),
+        "reason": ai_result.get("reason"),
+        "page_text_preview": page_text[:1000],
+    }
+
+
+# =========================
+# Report Builders
+# =========================
+
 def classify_ads_terms(ads_df, max_terms):
     rows = []
 
-    working_df = ads_df.sort_values(by="Clicks", ascending=False).head(max_terms)
+    working_df = ads_df.sort_values(
+        by="Clicks",
+        ascending=False,
+    ).head(max_terms)
 
     for _, row in working_df.iterrows():
         term = row["Search Term"]
@@ -881,18 +858,23 @@ def classify_ads_terms(ads_df, max_terms):
             }
         )
 
-        time.sleep(0.3)
+        time.sleep(0.2)
 
     return pd.DataFrame(rows)
 
 
-def build_price_radar(product_df, selected_competitors):
+def build_browser_price_radar(product_df, selected_competitors):
     main_rows = []
     detail_rows = []
-    debug_rows = []
 
     product_rows = product_df[
-        product_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
+        product_df["AI Type"].isin(
+            [
+                "PRODUCT",
+                "BRAND",
+                "GENERIC",
+            ]
+        )
     ]
 
     for _, row in product_rows.iterrows():
@@ -903,106 +885,114 @@ def build_price_radar(product_df, selected_competitors):
         else:
             product_query = search_term
 
-        own = alcohood_search(product_query)
-        own_price = own.get("alcohood_price")
-
-        for debug in own.get("debug", []):
-            debug_rows.append(
-                {
-                    "Site": "Alcohood",
-                    "Search Term": search_term,
-                    "Product Query": product_query,
-                    **debug,
-                }
-            )
+        alcohood_result = extract_alcohood_product(product_query)
+        alcohood_price = alcohood_result.get("price")
 
         competitor_results = []
 
         for competitor_name in selected_competitors:
-            result = search_competitor_product(product_query, competitor_name)
-            competitor_results.append(result)
+            result = extract_site_product(
+                competitor_name,
+                product_query,
+            )
 
-            for debug in result.get("debug", []):
-                debug_rows.append(
-                    {
-                        "Site": competitor_name,
-                        "Search Term": search_term,
-                        "Product Query": product_query,
-                        **debug,
-                    }
-                )
+            competitor_results.append(result)
 
             detail_rows.append(
                 {
                     "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "Search Term": search_term,
                     "Product Query": product_query,
-                    "Competitor": result.get("competitor_name"),
-                    "Competitor Product": result.get("competitor_title"),
-                    "Competitor Price": result.get("competitor_price"),
-                    "Competitor URL": result.get("competitor_url"),
-                    "Match Score": result.get("competitor_match_score"),
-                    "Reason": result.get("competitor_reason"),
+                    "Site": competitor_name,
+                    "Method": result.get("method"),
+                    "Found": result.get("found"),
+                    "Product Name": result.get("product_name"),
+                    "Price": result.get("price"),
+                    "Currency": result.get("currency"),
+                    "URL": result.get("url"),
+                    "Confidence": result.get("confidence"),
+                    "Reason": result.get("reason"),
+                    "Text Preview": result.get("page_text_preview"),
                 }
             )
 
-            time.sleep(0.4)
+            time.sleep(0.5)
 
         valid_competitors = [
-            item for item in competitor_results if item.get("competitor_price")
+            item
+            for item in competitor_results
+            if item.get("found") and item.get("price")
         ]
 
         cheapest = (
-            sorted(valid_competitors, key=lambda x: x["competitor_price"])[0]
+            sorted(
+                valid_competitors,
+                key=lambda x: x["price"],
+            )[0]
             if valid_competitors
             else {}
         )
 
-        competitor_price = cheapest.get("competitor_price")
-        competitor_name = cheapest.get("competitor_name", "")
-        competitor_title = cheapest.get("competitor_title", "")
-        competitor_url = cheapest.get("competitor_url", "")
+        competitor_price = cheapest.get("price")
+        competitor_name = cheapest.get("site", "")
+        competitor_product = cheapest.get("product_name", "")
+        competitor_url = cheapest.get("url", "")
 
-        if own_price and competitor_price:
-            difference = own_price - competitor_price
+        if alcohood_price and competitor_price:
+            difference = alcohood_price - competitor_price
 
-            if difference > 0:
+            ai_match = ai_sku_match(
+                product_query,
+                alcohood_result.get("product_name"),
+                alcohood_price,
+                competitor_name,
+                competitor_product,
+                competitor_price,
+            )
+
+            if ai_match.get("ai_action") == "Lower Price":
                 status = "🟠 Lower Price"
-                suggested_price = competitor_price - 1
-            else:
+                suggested_price = ai_match.get("ai_suggested_price")
+            elif ai_match.get("ai_action") == "Competitive":
                 status = "🟢 Competitive"
-                suggested_price = own_price
+                suggested_price = alcohood_price
+            else:
+                status = "🔴 Manual Review"
+                suggested_price = ""
 
-        elif competitor_price and not own_price:
+        elif competitor_price and not alcohood_price:
             difference = ""
             suggested_price = ""
             status = "🟡 Consider Listing"
+            ai_match = {
+                "same_sku": "",
+                "confidence": "",
+                "reason": "Alcohood product not found, competitor has product.",
+                "ai_action": "Consider Listing",
+                "ai_suggested_price": "",
+            }
 
-        elif not competitor_price and not own_price:
+        elif not competitor_price and not alcohood_price:
             difference = ""
             suggested_price = ""
             status = "🔵 Market Demand Only"
+            ai_match = {
+                "same_sku": "",
+                "confidence": "",
+                "reason": "No Alcohood or competitor price found.",
+                "ai_action": "Market Demand Only",
+                "ai_suggested_price": "",
+            }
 
         else:
             difference = ""
             suggested_price = ""
             status = "🔴 No Reliable Match"
-
-        if own_price and competitor_price:
-            ai_match = ai_sku_match(
-                product_query,
-                own.get("alcohood_title"),
-                own_price,
-                competitor_name,
-                competitor_title,
-                competitor_price,
-            )
-        else:
             ai_match = {
                 "same_sku": "",
                 "confidence": "",
-                "reason": "",
-                "ai_action": "",
+                "reason": "Alcohood found but competitor not found.",
+                "ai_action": "Manual Review",
                 "ai_suggested_price": "",
             }
 
@@ -1014,13 +1004,14 @@ def build_price_radar(product_df, selected_competitors):
                 "Impressions": row.get("Impressions", 0),
                 "AI Type": row.get("AI Type"),
                 "Product Query": product_query,
-                "Alcohood Product": own.get("alcohood_title"),
-                "Alcohood Price": own_price,
-                "Alcohood URL": own.get("alcohood_url"),
-                "Alcohood Match Score": own.get("alcohood_match_score"),
-                "Alcohood Reason": own.get("alcohood_reason"),
+                "Alcohood Found": alcohood_result.get("found"),
+                "Alcohood Product": alcohood_result.get("product_name"),
+                "Alcohood Price": alcohood_price,
+                "Alcohood URL": alcohood_result.get("url"),
+                "Alcohood Confidence": alcohood_result.get("confidence"),
+                "Alcohood Reason": alcohood_result.get("reason"),
                 "Cheapest Competitor": competitor_name,
-                "Competitor Product": competitor_title,
+                "Competitor Product": competitor_product,
                 "Competitor Price": competitor_price,
                 "Competitor URL": competitor_url,
                 "Difference": difference,
@@ -1034,10 +1025,14 @@ def build_price_radar(product_df, selected_competitors):
             }
         )
 
-        time.sleep(0.4)
+        time.sleep(0.5)
 
-    return pd.DataFrame(main_rows), pd.DataFrame(detail_rows), pd.DataFrame(debug_rows)
+    return pd.DataFrame(main_rows), pd.DataFrame(detail_rows)
 
+
+# =========================
+# Sidebar
+# =========================
 
 with st.sidebar:
     st.header("Settings")
@@ -1049,7 +1044,7 @@ with st.sidebar:
 
     selected_competitors = st.multiselect(
         "Competitors",
-        list(COMPETITOR_SEARCH_URLS.keys()),
+        list(BROWSER_SEARCH_FUNCTIONS.keys()),
         default=[
             "Watson's Wine",
             "Wine Couple",
@@ -1062,8 +1057,8 @@ with st.sidebar:
     max_terms = st.slider(
         "Max search terms to analyse",
         5,
-        100,
-        20,
+        50,
+        10,
     )
 
     run_classification = st.button(
@@ -1072,17 +1067,28 @@ with st.sidebar:
     )
 
     run_price_radar = st.button(
-        "2️⃣ Run Price & Listing Radar",
+        "2️⃣ Run Browser AI Price Radar",
     )
 
     test_ai = st.button(
         "Test OpenAI Connection",
     )
 
+    test_browser = st.button(
+        "Test Browser Agent",
+    )
+
+    test_watsons = st.button(
+        "Test Watson's Wine Search",
+    )
+
+
+# =========================
+# Main UI
+# =========================
 
 st.info(
-    "Upload your Google Ads Search Terms CSV. AI will classify real customer searches into PRODUCT, BRAND, COMPETITOR, GENERIC, or IGNORE. "
-    "This version filters out non-product pages such as delivery, shipping, collections, blog, and cart pages before using any price."
+    "This version uses a real browser via Playwright on Render, then uses OpenAI to extract the best matching product, price, and link from rendered website pages."
 )
 
 
@@ -1106,16 +1112,46 @@ if test_ai:
             st.error(f"OpenAI test failed: {error}")
 
 
+if test_browser:
+    if browser_test is None:
+        st.error("browser_agent.py is not imported correctly.")
+    else:
+        try:
+            result = browser_test()
+            st.success(f"Browser is working: {result}")
+        except Exception as error:
+            st.error(f"Browser test failed: {error}")
+
+
+if test_watsons:
+    if search_watsons is None:
+        st.error("search_watsons is not imported correctly.")
+    else:
+        try:
+            html = search_watsons("macallan 12")
+            text = html_to_clean_text(html, max_chars=5000)
+            st.success("Watson's Wine page loaded.")
+            st.text(text)
+        except Exception as error:
+            st.error(f"Watson's Wine search failed: {error}")
+
+
 if uploaded_file:
     ads_df = load_google_ads_csv(uploaded_file)
 
     if not ads_df.empty:
         st.subheader("Uploaded Google Ads Search Terms")
-        st.dataframe(ads_df.head(50), width="stretch")
+        st.dataframe(
+            ads_df.head(50),
+            width="stretch",
+        )
 
         if run_classification:
             with st.spinner("AI is classifying Google Ads search terms..."):
-                classified_df = classify_ads_terms(ads_df, max_terms)
+                classified_df = classify_ads_terms(
+                    ads_df,
+                    max_terms,
+                )
 
             st.session_state["classified_df"] = classified_df
 
@@ -1124,7 +1160,10 @@ if uploaded_file:
 
             st.subheader("AI Search Term Classification")
 
-            st.dataframe(classified_df, width="stretch")
+            st.dataframe(
+                classified_df,
+                width="stretch",
+            )
 
             st.download_button(
                 "Download AI Classification CSV",
@@ -1135,74 +1174,96 @@ if uploaded_file:
 
             c1, c2, c3, c4, c5 = st.columns(5)
 
-            c1.metric("PRODUCT", int((classified_df["AI Type"] == "PRODUCT").sum()))
-            c2.metric("BRAND", int((classified_df["AI Type"] == "BRAND").sum()))
-            c3.metric("COMPETITOR", int((classified_df["AI Type"] == "COMPETITOR").sum()))
-            c4.metric("GENERIC", int((classified_df["AI Type"] == "GENERIC").sum()))
-            c5.metric("IGNORE", int((classified_df["AI Type"] == "IGNORE").sum()))
-
-            st.subheader("Product Terms Selected for Price Radar")
+            c1.metric(
+                "PRODUCT",
+                int((classified_df["AI Type"] == "PRODUCT").sum()),
+            )
+            c2.metric(
+                "BRAND",
+                int((classified_df["AI Type"] == "BRAND").sum()),
+            )
+            c3.metric(
+                "COMPETITOR",
+                int((classified_df["AI Type"] == "COMPETITOR").sum()),
+            )
+            c4.metric(
+                "GENERIC",
+                int((classified_df["AI Type"] == "GENERIC").sum()),
+            )
+            c5.metric(
+                "IGNORE",
+                int((classified_df["AI Type"] == "IGNORE").sum()),
+            )
 
             product_terms_df = classified_df[
-                classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
+                classified_df["AI Type"].isin(
+                    [
+                        "PRODUCT",
+                        "BRAND",
+                        "GENERIC",
+                    ]
+                )
             ]
 
-            st.dataframe(product_terms_df, width="stretch")
+            st.subheader("Product Terms Selected for Browser Price Radar")
+            st.dataframe(
+                product_terms_df,
+                width="stretch",
+            )
 
             if run_price_radar:
-                with st.spinner("Searching Alcohood and competitors with product-page filtering..."):
-                    radar_df, detail_df, debug_df = build_price_radar(
+                with st.spinner("Browser Agent is searching competitor websites and OpenAI is extracting prices..."):
+                    radar_df, detail_df = build_browser_price_radar(
                         product_terms_df,
                         selected_competitors,
                     )
 
                 st.session_state["radar_df"] = radar_df
                 st.session_state["detail_df"] = detail_df
-                st.session_state["debug_df"] = debug_df
 
         if "radar_df" in st.session_state:
             radar_df = st.session_state["radar_df"]
             detail_df = st.session_state["detail_df"]
-            debug_df = st.session_state["debug_df"]
 
-            st.success("Price & Listing Radar completed")
+            st.success("Browser AI Price Radar completed")
 
             k1, k2, k3, k4 = st.columns(4)
 
-            k1.metric("Items Checked", len(radar_df))
-            k2.metric("Lower Price", int((radar_df["Status"] == "🟠 Lower Price").sum()))
-            k3.metric("Consider Listing", int((radar_df["Status"] == "🟡 Consider Listing").sum()))
-            k4.metric("Market Demand Only", int((radar_df["Status"] == "🔵 Market Demand Only").sum()))
+            k1.metric(
+                "Items Checked",
+                len(radar_df),
+            )
+            k2.metric(
+                "Lower Price",
+                int((radar_df["Status"] == "🟠 Lower Price").sum()),
+            )
+            k3.metric(
+                "Consider Listing",
+                int((radar_df["Status"] == "🟡 Consider Listing").sum()),
+            )
+            k4.metric(
+                "Market Demand Only",
+                int((radar_df["Status"] == "🔵 Market Demand Only").sum()),
+            )
 
             st.subheader("Price Actions / Review Needed")
 
-            price_actions_df = radar_df[
-                radar_df["Status"].isin(
-                    [
-                        "🟠 Lower Price",
-                        "🟢 Competitive",
-                        "🔴 No Reliable Match",
-                    ]
-                )
-            ]
-
-            st.dataframe(price_actions_df, width="stretch")
-
-            st.subheader("All Items Needing Review")
-
-            review_df = radar_df[
-                radar_df["Status"].isin(
-                    [
-                        "🔴 No Reliable Match",
-                        "🔵 Market Demand Only",
-                        "🟡 Consider Listing",
-                    ]
-                )
-            ]
-
-            st.dataframe(review_df, width="stretch")
+            st.dataframe(
+                radar_df[
+                    radar_df["Status"].isin(
+                        [
+                            "🟠 Lower Price",
+                            "🟢 Competitive",
+                            "🔴 Manual Review",
+                            "🔴 No Reliable Match",
+                        ]
+                    )
+                ],
+                width="stretch",
+            )
 
             st.subheader("Listing Opportunities")
+
             st.dataframe(
                 radar_df[
                     radar_df["Status"].isin(
@@ -1215,47 +1276,40 @@ if uploaded_file:
                 width="stretch",
             )
 
-            st.subheader("Full Radar Dashboard")
-            st.dataframe(radar_df, width="stretch")
+            st.subheader("Full Browser AI Radar Dashboard")
+
+            st.dataframe(
+                radar_df,
+                width="stretch",
+            )
 
             st.download_button(
-                "Download Full Radar CSV",
+                "Download Browser AI Radar CSV",
                 radar_df.to_csv(index=False).encode("utf-8-sig"),
-                "alcohood_ai_demand_pricing_radar.csv",
+                "alcohood_browser_ai_radar.csv",
                 "text/csv",
             )
 
-            st.subheader("Competitor Detail Report")
-            st.dataframe(detail_df, width="stretch")
+            st.subheader("Competitor Search Detail Report")
+
+            st.dataframe(
+                detail_df,
+                width="stretch",
+            )
 
             st.download_button(
-                "Download Competitor Detail CSV",
+                "Download Detail CSV",
                 detail_df.to_csv(index=False).encode("utf-8-sig"),
-                "alcohood_competitor_detail_report.csv",
-                "text/csv",
-            )
-
-            st.subheader("Debug: Candidate Pages Checked")
-            st.caption(
-                "Use this table to see why a page was rejected, e.g. not product URL, no price found, or product name mismatch."
-            )
-
-            st.dataframe(debug_df, width="stretch")
-
-            st.download_button(
-                "Download Debug CSV",
-                debug_df.to_csv(index=False).encode("utf-8-sig"),
-                "alcohood_debug_candidate_pages.csv",
+                "alcohood_browser_ai_detail.csv",
                 "text/csv",
             )
 
 else:
     st.subheader("How to use")
     st.write(
-        "1. Export Google Ads Search Terms CSV. "
-        "2. Upload the CSV here. "
-        "3. Click 1️⃣ Analyse Google Ads Terms. "
-        "4. Review AI classification. "
-        "5. Click 2️⃣ Run Price & Listing Radar. "
-        "6. Check Price Actions / Review Needed, Listing Opportunities, and Debug table."
+        "1. Upload Google Ads Search Terms CSV. "
+        "2. Click Test Browser Agent first. "
+        "3. Click Test Watson's Wine Search. "
+        "4. Click 1️⃣ Analyse Google Ads Terms. "
+        "5. Click 2️⃣ Run Browser AI Price Radar."
     )
