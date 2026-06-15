@@ -1,7 +1,6 @@
 from playwright.sync_api import sync_playwright
 
-
-def search_watsons(product_name):
+def browser_test():
 
     with sync_playwright() as p:
 
@@ -11,18 +10,13 @@ def search_watsons(product_name):
 
         page = browser.new_page()
 
-        search_url = (
-            "https://www.watsonswine.com/en/search?text="
-            + product_name.replace(" ", "%20")
-        )
-
         page.goto(
-            search_url,
-            wait_until="networkidle"
+            "https://www.google.com",
+            timeout=60000
         )
 
-        html = page.content()
+        title = page.title()
 
         browser.close()
 
-        return html
+        return title
