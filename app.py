@@ -12,7 +12,6 @@ import streamlit as st
 from bs4 import BeautifulSoup
 from openai import OpenAI
 
-
 try:
     from browser_agent import (
         browser_test,
@@ -39,35 +38,37 @@ except Exception:
     search_alcohood = None
 
 
-st.set_page_config(
-    page_title="Alcohood AI Demand & Pricing Agent",
-    layout="wide"
-)
+st.set_page_config(page_title="Alcohood AI Demand & Pricing Agent", layout="wide")
 
 st.title("🍾 Alcohood AI Demand & Pricing Agent")
-st.caption(
-    "Google Ads Search Terms • Browser Agent Search • AI Product Extraction • SKU Matching • Pricing Action"
-)
+st.caption("Google Ads Search Terms • Browser Agent Search • AI Product Extraction • Pricing Action")
 
+
+# =========================
+# OpenAI
+# =========================
 
 def get_openai_client():
-    try:
-        api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
 
-        if not api_key:
+    if not api_key:
+        try:
             api_key = st.secrets.get("OPENAI_API_KEY")
+        except Exception:
+            api_key = None
 
-        if not api_key:
-            return None
-
-        return OpenAI(api_key=api_key)
-
-    except Exception:
+    if not api_key:
         return None
+
+    return OpenAI(api_key=api_key)
 
 
 client = get_openai_client()
 
+
+# =========================
+# Browser Search Config
+# =========================
 
 BROWSER_SEARCH_FUNCTIONS = {
     "Watson's Wine": search_watsons,
@@ -79,7 +80,6 @@ BROWSER_SEARCH_FUNCTIONS = {
     "Onexcel Wine": search_onexcel,
     "偉成洋酒": search_waishing,
 }
-
 
 FALLBACK_SEARCH_URLS = {
     "Watson's Wine": "https://www.watsonswine.com/en/search?text={query}&useDefaultSearch=false&brandRedirect=true",
@@ -93,31 +93,25 @@ FALLBACK_SEARCH_URLS = {
     "Alcohood": "https://www.alcohood.com/search?q={query}",
 }
 
-
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/125 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
     "Accept-Language": "en-HK,en;q=0.9,zh-HK;q=0.8",
 }
 
 
 # =========================
-# Basic Helpers
+# Helpers
 # =========================
 
 def build_search_url(template, query):
     return template.replace("{query}", urllib.parse.quote_plus(str(query)))
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def fetch(url):
     try:
-        response = requests.get(url, headers=HEADERS, timeout=20)
-        if response.status_code == 200:
-            return response.text
-        return ""
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        return r.text if r.status_code == 200 else ""
     except Exception:
         return ""
 
@@ -144,12 +138,7 @@ def clean_number(value):
         return 0
 
     text = str(value)
-    text = text.replace(",", "")
-    text = text.replace("HK$", "")
-    text = text.replace("$", "")
-    text = text.replace("%", "")
-    text = text.strip()
-
+    text = text.replace(",", "").replace("HK$", "").replace("$", "").replace("%", "").strip()
     match = re.search(r"-?\d+(?:\.\d+)?", text)
 
     if not match:
@@ -159,29 +148,6 @@ def clean_number(value):
         return float(match.group(0))
     except Exception:
         return 0
-
-
-def money_to_float(text):
-    if not text:
-        return None
-
-    patterns = [
-        r"(?:HK\$|HKD|\$)\s*([0-9][0-9,]*(?:\.\d+)?)",
-        r"([0-9][0-9,]*(?:\.\d+)?)\s*(?:HKD|港幣|港元)",
-    ]
-
-    prices = []
-
-    for pattern in patterns:
-        for match in re.findall(pattern, text, re.I):
-            try:
-                price = float(str(match).replace(",", ""))
-                if 20 <= price <= 100000:
-                    prices.append(price)
-            except Exception:
-                pass
-
-    return min(prices) if prices else None
 
 
 def html_to_clean_text(html, max_chars=12000):
@@ -233,14 +199,11 @@ def extract_links_from_html(html, base_url=None, allowed_domain=None, max_links=
 
 
 # =========================
-# Google Ads CSV Handling
+# CSV Reader
 # =========================
 
 def find_column(df, possible_names):
-    lower_map = {
-        str(col).lower().strip(): col
-        for col in df.columns
-    }
+    lower_map = {str(col).lower().strip(): col for col in df.columns}
 
     for name in possible_names:
         if name.lower() in lower_map:
@@ -248,7 +211,6 @@ def find_column(df, possible_names):
 
     for col in df.columns:
         col_lower = str(col).lower()
-
         for name in possible_names:
             if name.lower() in col_lower:
                 return col
@@ -259,15 +221,7 @@ def find_column(df, possible_names):
 def smart_read_uploaded_text(uploaded_file):
     raw = uploaded_file.getvalue()
 
-    encodings = [
-        "utf-8-sig",
-        "utf-8",
-        "big5",
-        "cp950",
-        "latin1",
-    ]
-
-    for enc in encodings:
+    for enc in ["utf-8-sig", "utf-8", "big5", "cp950", "latin1"]:
         try:
             return raw.decode(enc)
         except Exception:
@@ -277,22 +231,10 @@ def smart_read_uploaded_text(uploaded_file):
 
 
 def detect_header_index(lines):
-    header_keywords = [
-        "搜尋字詞",
-        "Search term",
-        "Search Term",
-        "搜索字詞",
-        "Clicks",
-        "點擊次數",
-    ]
+    header_keywords = ["搜尋字詞", "Search term", "Search Term", "搜索字詞", "Clicks", "點擊次數"]
 
     for i, line in enumerate(lines):
-        score = 0
-
-        for keyword in header_keywords:
-            if keyword in line:
-                score += 1
-
+        score = sum(1 for keyword in header_keywords if keyword in line)
         if score >= 2:
             return i
 
@@ -317,15 +259,9 @@ def read_table_from_text(text):
 
     for kwargs in attempts:
         try:
-            df = pd.read_csv(
-                StringIO(cleaned_text),
-                **kwargs,
-                on_bad_lines="skip",
-            )
-
+            df = pd.read_csv(StringIO(cleaned_text), **kwargs, on_bad_lines="skip")
             if len(df.columns) >= 2:
                 return df
-
         except Exception:
             continue
 
@@ -336,7 +272,6 @@ def load_google_ads_csv(uploaded_file):
     try:
         text = smart_read_uploaded_text(uploaded_file)
         df = read_table_from_text(text)
-
     except Exception as error:
         st.error(f"Failed to read uploaded file: {error}")
         return pd.DataFrame()
@@ -345,88 +280,34 @@ def load_google_ads_csv(uploaded_file):
         st.error("Unable to read the Google Ads file. Please export Search Terms as CSV.")
         return pd.DataFrame()
 
-    search_col = find_column(
-        df,
-        [
-            "Search term",
-            "Search Terms",
-            "搜尋字詞",
-            "搜索字詞",
-            "搜尋字詞 ",
-        ],
-    )
-
-    clicks_col = find_column(
-        df,
-        [
-            "Clicks",
-            "點擊次數",
-            "點擊",
-        ],
-    )
-
-    cost_col = find_column(
-        df,
-        [
-            "Cost",
-            "成本",
-            "費用",
-        ],
-    )
-
-    impressions_col = find_column(
-        df,
-        [
-            "Impressions",
-            "展示",
-            "展示次數",
-        ],
-    )
+    search_col = find_column(df, ["Search term", "Search Terms", "搜尋字詞", "搜索字詞"])
+    clicks_col = find_column(df, ["Clicks", "點擊次數", "點擊"])
+    cost_col = find_column(df, ["Cost", "成本", "費用"])
+    impressions_col = find_column(df, ["Impressions", "展示", "展示次數"])
 
     if not search_col:
-        st.error("Cannot find Search Term column. Please check your CSV export.")
-        st.write("Detected columns:")
+        st.error("Cannot find Search Term column. Detected columns:")
         st.write(list(df.columns))
         return pd.DataFrame()
 
     clean_df = pd.DataFrame()
     clean_df["Search Term"] = df[search_col].astype(str)
-
-    clean_df["Clicks"] = (
-        df[clicks_col].apply(clean_number)
-        if clicks_col
-        else 0
-    )
-
-    clean_df["Cost"] = (
-        df[cost_col].astype(str)
-        if cost_col
-        else ""
-    )
-
-    clean_df["Impressions"] = (
-        df[impressions_col].apply(clean_number)
-        if impressions_col
-        else 0
-    )
+    clean_df["Clicks"] = df[clicks_col].apply(clean_number) if clicks_col else 0
+    clean_df["Cost"] = df[cost_col].astype(str) if cost_col else ""
+    clean_df["Impressions"] = df[impressions_col].apply(clean_number) if impressions_col else 0
 
     clean_df = clean_df.dropna(subset=["Search Term"])
     clean_df = clean_df[clean_df["Search Term"].str.strip() != ""]
     clean_df = clean_df[
-        ~clean_df["Search Term"].str.contains(
-            "Total|總計|已移除",
-            case=False,
-            na=False,
-        )
+        ~clean_df["Search Term"].str.contains("Total|總計|已移除", case=False, na=False)
     ]
-
     clean_df = clean_df.drop_duplicates(subset=["Search Term"])
 
     return clean_df
 
 
 # =========================
-# AI Logic
+# AI Functions
 # =========================
 
 def ai_classify_search_term(term):
@@ -447,11 +328,11 @@ Search term:
 {term}
 
 Classification options:
-- PRODUCT: specific sellable alcohol product, e.g. Macallan 12, Dassai 45, Hennessy XO
-- BRAND: brand only, e.g. Macallan, Hennessy, Dassai
-- COMPETITOR: shop name or competitor name, e.g. Watson Wine, Wine Couple
-- GENERIC: broad category, e.g. red wine, sake, whisky, champagne
-- IGNORE: unrelated or too vague
+- PRODUCT: specific sellable alcohol product, e.g. Macallan 12, Dassai 45, Hennessy XO, Roku Gin
+- BRAND: alcohol brand only, e.g. Macallan, Hennessy, Dassai, Moet
+- COMPETITOR: shop name, e.g. Watson Wine, Wine Couple
+- GENERIC: broad alcohol category, e.g. red wine, sake, whisky, champagne
+- IGNORE: unrelated, too vague, or Alcohood/酒舍 own-brand search
 
 Return JSON only:
 {{
@@ -465,12 +346,7 @@ Return JSON only:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
 
@@ -504,11 +380,21 @@ def ai_extract_product_from_page(search_term, site_name, page_text, candidate_li
             "reason": "OpenAI API is not connected.",
         }
 
+    if "access denied" in page_text.lower() or "permission to access" in page_text.lower():
+        return {
+            "found": False,
+            "product_name": "",
+            "price": None,
+            "currency": "",
+            "url": "",
+            "confidence": 0,
+            "reason": "Website blocked access from server.",
+        }
+
     prompt = f"""
 You are an alcohol ecommerce research agent.
 
-Task:
-From the rendered website text below, find the best matching alcohol product for the search term.
+Find the best matching product and price from this rendered website text.
 
 Search term:
 {search_term}
@@ -518,12 +404,11 @@ Website:
 
 Rules:
 - Only return a result if it is a real product listing.
-- Do not use delivery fee, shipping fee, membership fee, event fee, deposit, or coupon value as product price.
+- Do NOT use delivery fee, shipping fee, membership fee, event fee, deposit, or coupon value as product price.
 - Prefer exact SKU match.
 - Check brand, age statement, edition, bottle size, vintage, grade.
-- If the page does not clearly show a matching product and price, return found=false.
-- Price must be in HKD if possible.
-- Use candidate links only if they seem related to the product.
+- If no clear matching product with price is visible, return found=false.
+- Price should be HKD.
 
 Rendered page text:
 {page_text[:10000]}
@@ -546,12 +431,7 @@ Return JSON only:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
 
@@ -579,47 +459,20 @@ Return JSON only:
         }
 
 
-def ai_sku_match(
-    search_term,
-    alcohood_name,
-    alcohood_price,
-    competitor_name,
-    competitor_product,
-    competitor_price,
-):
-    if client is None:
+def ai_sku_match(search_term, alcohood_name, alcohood_price, competitor_name, competitor_product, competitor_price):
+    if client is None or not alcohood_price or not competitor_price:
         return {
             "same_sku": False,
             "confidence": 0,
-            "reason": "OpenAI API is not connected.",
-            "ai_action": "API Not Connected",
-            "ai_suggested_price": None,
-        }
-
-    if not alcohood_price or not competitor_price:
-        return {
-            "same_sku": False,
-            "confidence": 0,
-            "reason": "Missing Alcohood or competitor price.",
+            "reason": "Missing OpenAI or price.",
             "ai_action": "Manual Review",
             "ai_suggested_price": None,
         }
 
     prompt = f"""
-You are an alcohol e-commerce pricing analyst for Alcohood Hong Kong.
+Decide whether these two alcohol products are the SAME SKU.
 
-Decide whether the Alcohood product and competitor product are the SAME SKU.
-
-Check:
-- brand
-- product name
-- category
-- age statement
-- edition, e.g. Double Cask / Sherry Oak
-- bottle size, e.g. 700ml / 720ml / 750ml / 1L
-- vintage for wine/champagne
-- sake grade
-- cognac grade
+Check brand, category, age statement, edition, bottle size, vintage, sake grade, cognac grade.
 
 Search term:
 {search_term}
@@ -633,54 +486,42 @@ Competitor:
 {competitor_product}
 Price: HK${competitor_price}
 
-Rule:
-If same SKU and Alcohood is more expensive, suggested price = competitor price - 1.
-If not same SKU or confidence below 80, action = Manual Review.
-
 Return JSON only:
 {{
   "same_sku": true,
   "confidence": 95,
-  "reason": "Same product, same age and edition.",
-  "ai_action": "Lower Price",
-  "ai_suggested_price": 667
+  "reason": "Same product, same age and edition."
 }}
 """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
 
         data = safe_json_loads(response.choices[0].message.content)
-
         same_sku = bool(data.get("same_sku", False))
         confidence = int(data.get("confidence", 0) or 0)
 
         if same_sku and confidence >= 80:
             if float(alcohood_price) > float(competitor_price):
-                ai_action = "Lower Price"
-                ai_suggested_price = float(competitor_price) - 1
+                action = "Lower Price"
+                suggested = float(competitor_price) - 1
             else:
-                ai_action = "Competitive"
-                ai_suggested_price = float(alcohood_price)
+                action = "Competitive"
+                suggested = float(alcohood_price)
         else:
-            ai_action = "Manual Review"
-            ai_suggested_price = None
+            action = "Manual Review"
+            suggested = None
 
         return {
             "same_sku": same_sku,
             "confidence": confidence,
             "reason": data.get("reason", ""),
-            "ai_action": ai_action,
-            "ai_suggested_price": ai_suggested_price,
+            "ai_action": action,
+            "ai_suggested_price": suggested,
         }
 
     except Exception as error:
@@ -694,50 +535,39 @@ Return JSON only:
 
 
 # =========================
-# Browser Search Agent
+# Browser Search
 # =========================
 
-def get_rendered_html_for_site(site_name, product_query):
-    search_func = BROWSER_SEARCH_FUNCTIONS.get(site_name)
+def get_browser_html(site_name, product_query):
+    func = BROWSER_SEARCH_FUNCTIONS.get(site_name)
 
-    if search_func is None:
-        return ""
+    if func is None:
+        return "", "No browser function"
 
     try:
-        return search_func(product_query)
+        return func(product_query), "Playwright Browser"
     except Exception as error:
-        return f"__BROWSER_ERROR__: {error}"
+        return f"__BROWSER_ERROR__: {error}", f"Browser error: {error}"
 
 
-def fallback_fetch_html(site_name, product_query):
+def fallback_html(site_name, product_query):
     template = FALLBACK_SEARCH_URLS.get(site_name)
-
     if not template:
         return ""
-
-    url = build_search_url(template, product_query)
-    return fetch(url)
+    return fetch(build_search_url(template, product_query))
 
 
 def extract_site_product(site_name, product_query):
-    html = get_rendered_html_for_site(site_name, product_query)
-    method = "Playwright Browser"
+    html, method = get_browser_html(site_name, product_query)
 
     if not html or html.startswith("__BROWSER_ERROR__"):
-        error_msg = html
-        html = fallback_fetch_html(site_name, product_query)
-        method = f"Fallback requests after browser error: {error_msg}"
+        html = fallback_html(site_name, product_query)
+        method = f"Fallback requests after {method}"
 
-    search_url = build_search_url(
-        FALLBACK_SEARCH_URLS.get(site_name, ""),
-        product_query,
-    )
+    search_url = build_search_url(FALLBACK_SEARCH_URLS.get(site_name, ""), product_query)
 
     page_text = html_to_clean_text(html)
-    candidate_links = extract_links_from_html(
-        html,
-        base_url=search_url,
-    )
+    candidate_links = extract_links_from_html(html, base_url=search_url)
 
     ai_result = ai_extract_product_from_page(
         product_query,
@@ -749,10 +579,7 @@ def extract_site_product(site_name, product_query):
     price = ai_result.get("price")
 
     try:
-        if price is not None and price != "":
-            price = float(str(price).replace(",", ""))
-        else:
-            price = None
+        price = float(str(price).replace(",", "")) if price not in [None, ""] else None
     except Exception:
         price = None
 
@@ -772,31 +599,22 @@ def extract_site_product(site_name, product_query):
 
 def extract_alcohood_product(product_query):
     html = ""
+    method = "Playwright Browser"
 
     if search_alcohood:
         try:
             html = search_alcohood(product_query)
         except Exception as error:
             html = f"__BROWSER_ERROR__: {error}"
-
-    method = "Playwright Browser"
+            method = f"Browser error: {error}"
 
     if not html or html.startswith("__BROWSER_ERROR__"):
-        error_msg = html
-        html = fallback_fetch_html("Alcohood", product_query)
-        method = f"Fallback requests after browser error: {error_msg}"
+        html = fallback_html("Alcohood", product_query)
+        method = f"Fallback requests after {method}"
 
-    search_url = build_search_url(
-        FALLBACK_SEARCH_URLS.get("Alcohood", ""),
-        product_query,
-    )
-
+    search_url = build_search_url(FALLBACK_SEARCH_URLS["Alcohood"], product_query)
     page_text = html_to_clean_text(html)
-    candidate_links = extract_links_from_html(
-        html,
-        base_url=search_url,
-        allowed_domain="alcohood.com",
-    )
+    candidate_links = extract_links_from_html(html, base_url=search_url, allowed_domain="alcohood.com")
 
     ai_result = ai_extract_product_from_page(
         product_query,
@@ -808,10 +626,7 @@ def extract_alcohood_product(product_query):
     price = ai_result.get("price")
 
     try:
-        if price is not None and price != "":
-            price = float(str(price).replace(",", ""))
-        else:
-            price = None
+        price = float(str(price).replace(",", "")) if price not in [None, ""] else None
     except Exception:
         price = None
 
@@ -836,27 +651,22 @@ def extract_alcohood_product(product_query):
 def classify_ads_terms(ads_df, max_terms):
     rows = []
 
-    working_df = ads_df.sort_values(
-        by="Clicks",
-        ascending=False,
-    ).head(max_terms)
+    working_df = ads_df.sort_values(by="Clicks", ascending=False).head(max_terms)
 
     for _, row in working_df.iterrows():
         term = row["Search Term"]
         ai = ai_classify_search_term(term)
 
-        rows.append(
-            {
-                "Search Term": term,
-                "Clicks": row.get("Clicks", 0),
-                "Impressions": row.get("Impressions", 0),
-                "Cost": row.get("Cost", ""),
-                "AI Type": ai.get("type"),
-                "Normalized Product": ai.get("normalized_product"),
-                "AI Category": ai.get("category"),
-                "AI Reason": ai.get("reason"),
-            }
-        )
+        rows.append({
+            "Search Term": term,
+            "Clicks": row.get("Clicks", 0),
+            "Impressions": row.get("Impressions", 0),
+            "Cost": row.get("Cost", ""),
+            "AI Type": ai.get("type"),
+            "Normalized Product": ai.get("normalized_product"),
+            "AI Category": ai.get("category"),
+            "AI Reason": ai.get("reason"),
+        })
 
         time.sleep(0.2)
 
@@ -868,13 +678,7 @@ def build_browser_price_radar(product_df, selected_competitors):
     detail_rows = []
 
     product_rows = product_df[
-        product_df["AI Type"].isin(
-            [
-                "PRODUCT",
-                "BRAND",
-                "GENERIC",
-            ]
-        )
+        product_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
     ]
 
     for _, row in product_rows.iterrows():
@@ -891,47 +695,33 @@ def build_browser_price_radar(product_df, selected_competitors):
         competitor_results = []
 
         for competitor_name in selected_competitors:
-            result = extract_site_product(
-                competitor_name,
-                product_query,
-            )
-
+            result = extract_site_product(competitor_name, product_query)
             competitor_results.append(result)
 
-            detail_rows.append(
-                {
-                    "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "Search Term": search_term,
-                    "Product Query": product_query,
-                    "Site": competitor_name,
-                    "Method": result.get("method"),
-                    "Found": result.get("found"),
-                    "Product Name": result.get("product_name"),
-                    "Price": result.get("price"),
-                    "Currency": result.get("currency"),
-                    "URL": result.get("url"),
-                    "Confidence": result.get("confidence"),
-                    "Reason": result.get("reason"),
-                    "Text Preview": result.get("page_text_preview"),
-                }
-            )
+            detail_rows.append({
+                "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "Search Term": search_term,
+                "Product Query": product_query,
+                "Site": competitor_name,
+                "Method": result.get("method"),
+                "Found": result.get("found"),
+                "Product Name": result.get("product_name"),
+                "Price": result.get("price"),
+                "Currency": result.get("currency"),
+                "URL": result.get("url"),
+                "Confidence": result.get("confidence"),
+                "Reason": result.get("reason"),
+                "Text Preview": result.get("page_text_preview"),
+            })
 
-            time.sleep(0.5)
+            time.sleep(0.3)
 
         valid_competitors = [
-            item
-            for item in competitor_results
+            item for item in competitor_results
             if item.get("found") and item.get("price")
         ]
 
-        cheapest = (
-            sorted(
-                valid_competitors,
-                key=lambda x: x["price"],
-            )[0]
-            if valid_competitors
-            else {}
-        )
+        cheapest = sorted(valid_competitors, key=lambda x: x["price"])[0] if valid_competitors else {}
 
         competitor_price = cheapest.get("price")
         competitor_name = cheapest.get("site", "")
@@ -940,7 +730,6 @@ def build_browser_price_radar(product_df, selected_competitors):
 
         if alcohood_price and competitor_price:
             difference = alcohood_price - competitor_price
-
             ai_match = ai_sku_match(
                 product_query,
                 alcohood_result.get("product_name"),
@@ -958,11 +747,11 @@ def build_browser_price_radar(product_df, selected_competitors):
                 suggested_price = alcohood_price
             else:
                 status = "🔴 Manual Review"
-                suggested_price = ""
+                suggested_price = None
 
         elif competitor_price and not alcohood_price:
-            difference = ""
-            suggested_price = ""
+            difference = None
+            suggested_price = None
             status = "🟡 Consider Listing"
             ai_match = {
                 "same_sku": "",
@@ -973,8 +762,8 @@ def build_browser_price_radar(product_df, selected_competitors):
             }
 
         elif not competitor_price and not alcohood_price:
-            difference = ""
-            suggested_price = ""
+            difference = None
+            suggested_price = None
             status = "🔵 Market Demand Only"
             ai_match = {
                 "same_sku": "",
@@ -985,8 +774,8 @@ def build_browser_price_radar(product_df, selected_competitors):
             }
 
         else:
-            difference = ""
-            suggested_price = ""
+            difference = None
+            suggested_price = None
             status = "🔴 No Reliable Match"
             ai_match = {
                 "same_sku": "",
@@ -996,36 +785,34 @@ def build_browser_price_radar(product_df, selected_competitors):
                 "ai_suggested_price": "",
             }
 
-        main_rows.append(
-            {
-                "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "Search Term": search_term,
-                "Clicks": row.get("Clicks", 0),
-                "Impressions": row.get("Impressions", 0),
-                "AI Type": row.get("AI Type"),
-                "Product Query": product_query,
-                "Alcohood Found": alcohood_result.get("found"),
-                "Alcohood Product": alcohood_result.get("product_name"),
-                "Alcohood Price": alcohood_price,
-                "Alcohood URL": alcohood_result.get("url"),
-                "Alcohood Confidence": alcohood_result.get("confidence"),
-                "Alcohood Reason": alcohood_result.get("reason"),
-                "Cheapest Competitor": competitor_name,
-                "Competitor Product": competitor_product,
-                "Competitor Price": competitor_price,
-                "Competitor URL": competitor_url,
-                "Difference": difference,
-                "Suggested Price": suggested_price,
-                "Status": status,
-                "AI Same SKU": ai_match.get("same_sku"),
-                "AI Confidence": ai_match.get("confidence"),
-                "AI Reason": ai_match.get("reason"),
-                "AI Action": ai_match.get("ai_action"),
-                "AI Suggested Price": ai_match.get("ai_suggested_price"),
-            }
-        )
+        main_rows.append({
+            "Date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Search Term": search_term,
+            "Clicks": row.get("Clicks", 0),
+            "Impressions": row.get("Impressions", 0),
+            "AI Type": row.get("AI Type"),
+            "Product Query": product_query,
+            "Alcohood Found": alcohood_result.get("found"),
+            "Alcohood Product": alcohood_result.get("product_name"),
+            "Alcohood Price": alcohood_price,
+            "Alcohood URL": alcohood_result.get("url"),
+            "Alcohood Confidence": alcohood_result.get("confidence"),
+            "Alcohood Reason": alcohood_result.get("reason"),
+            "Cheapest Competitor": competitor_name,
+            "Competitor Product": competitor_product,
+            "Competitor Price": competitor_price,
+            "Competitor URL": competitor_url,
+            "Difference": difference,
+            "Suggested Price": suggested_price,
+            "Status": status,
+            "AI Same SKU": ai_match.get("same_sku"),
+            "AI Confidence": ai_match.get("confidence"),
+            "AI Reason": ai_match.get("reason"),
+            "AI Action": ai_match.get("ai_action"),
+            "AI Suggested Price": ai_match.get("ai_suggested_price"),
+        })
 
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     return pd.DataFrame(main_rows), pd.DataFrame(detail_rows)
 
@@ -1054,33 +841,13 @@ with st.sidebar:
         ],
     )
 
-    max_terms = st.slider(
-        "Max search terms to analyse",
-        5,
-        50,
-        10,
-    )
+    max_terms = st.slider("Max search terms to analyse", 5, 50, 10)
 
-    run_classification = st.button(
-        "1️⃣ Analyse Google Ads Terms",
-        type="primary",
-    )
-
-    run_price_radar = st.button(
-        "2️⃣ Run Browser AI Price Radar",
-    )
-
-    test_ai = st.button(
-        "Test OpenAI Connection",
-    )
-
-    test_browser = st.button(
-        "Test Browser Agent",
-    )
-
-    test_watsons = st.button(
-        "Test Watson's Wine Search",
-    )
+    run_classification = st.button("1️⃣ Analyse Google Ads Terms", type="primary")
+    run_price_radar = st.button("2️⃣ Run Browser AI Price Radar")
+    test_ai = st.button("Test OpenAI Connection")
+    test_browser = st.button("Test Browser Agent")
+    test_watsons = st.button("Test Watson's Wine Search")
 
 
 # =========================
@@ -1099,12 +866,7 @@ if test_ai:
         try:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "Say: Alcohood AI is connected.",
-                    }
-                ],
+                messages=[{"role": "user", "content": "Say: Alcohood AI is connected."}],
                 temperature=0,
             )
             st.success(response.choices[0].message.content)
@@ -1141,29 +903,22 @@ if uploaded_file:
 
     if not ads_df.empty:
         st.subheader("Uploaded Google Ads Search Terms")
-        st.dataframe(
-            ads_df.head(50),
-            width="stretch",
-        )
+        st.dataframe(ads_df.head(60), width="stretch")
 
         if run_classification:
+            st.success("Analyse button clicked.")
+
             with st.spinner("AI is classifying Google Ads search terms..."):
-                classified_df = classify_ads_terms(
-                    ads_df,
-                    max_terms,
-                )
+                classified_df = classify_ads_terms(ads_df, max_terms)
 
             st.session_state["classified_df"] = classified_df
+            st.success("AI classification completed.")
 
         if "classified_df" in st.session_state:
             classified_df = st.session_state["classified_df"]
 
             st.subheader("AI Search Term Classification")
-
-            st.dataframe(
-                classified_df,
-                width="stretch",
-            )
+            st.dataframe(classified_df, width="stretch")
 
             st.download_button(
                 "Download AI Classification CSV",
@@ -1173,115 +928,82 @@ if uploaded_file:
             )
 
             c1, c2, c3, c4, c5 = st.columns(5)
-
-            c1.metric(
-                "PRODUCT",
-                int((classified_df["AI Type"] == "PRODUCT").sum()),
-            )
-            c2.metric(
-                "BRAND",
-                int((classified_df["AI Type"] == "BRAND").sum()),
-            )
-            c3.metric(
-                "COMPETITOR",
-                int((classified_df["AI Type"] == "COMPETITOR").sum()),
-            )
-            c4.metric(
-                "GENERIC",
-                int((classified_df["AI Type"] == "GENERIC").sum()),
-            )
-            c5.metric(
-                "IGNORE",
-                int((classified_df["AI Type"] == "IGNORE").sum()),
-            )
+            c1.metric("PRODUCT", int((classified_df["AI Type"] == "PRODUCT").sum()))
+            c2.metric("BRAND", int((classified_df["AI Type"] == "BRAND").sum()))
+            c3.metric("COMPETITOR", int((classified_df["AI Type"] == "COMPETITOR").sum()))
+            c4.metric("GENERIC", int((classified_df["AI Type"] == "GENERIC").sum()))
+            c5.metric("IGNORE", int((classified_df["AI Type"] == "IGNORE").sum()))
 
             product_terms_df = classified_df[
-                classified_df["AI Type"].isin(
-                    [
-                        "PRODUCT",
-                        "BRAND",
-                        "GENERIC",
-                    ]
-                )
+                classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
             ]
 
             st.subheader("Product Terms Selected for Browser Price Radar")
-            st.dataframe(
-                product_terms_df,
-                width="stretch",
-            )
+            st.dataframe(product_terms_df, width="stretch")
 
-            if run_price_radar:
-                with st.spinner("Browser Agent is searching competitor websites and OpenAI is extracting prices..."):
-                    radar_df, detail_df = build_browser_price_radar(
-                        product_terms_df,
-                        selected_competitors,
-                    )
+        if run_price_radar:
+            st.success("Price Radar button clicked.")
 
-                st.session_state["radar_df"] = radar_df
-                st.session_state["detail_df"] = detail_df
+            if "classified_df" not in st.session_state:
+                st.error("Please click 1️⃣ Analyse Google Ads Terms first.")
+                st.stop()
+
+            classified_df = st.session_state["classified_df"]
+
+            product_terms_df = classified_df[
+                classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
+            ]
+
+            if product_terms_df.empty:
+                st.warning("No PRODUCT / BRAND / GENERIC terms found to search.")
+                st.stop()
+
+            with st.spinner("Browser Agent is searching competitor websites and OpenAI is extracting prices..."):
+                radar_df, detail_df = build_browser_price_radar(
+                    product_terms_df,
+                    selected_competitors,
+                )
+
+            st.session_state["radar_df"] = radar_df
+            st.session_state["detail_df"] = detail_df
+            st.success("Browser AI Price Radar completed.")
 
         if "radar_df" in st.session_state:
             radar_df = st.session_state["radar_df"]
-            detail_df = st.session_state["detail_df"]
-
-            st.success("Browser AI Price Radar completed")
+            detail_df = st.session_state.get("detail_df", pd.DataFrame())
 
             k1, k2, k3, k4 = st.columns(4)
-
-            k1.metric(
-                "Items Checked",
-                len(radar_df),
-            )
-            k2.metric(
-                "Lower Price",
-                int((radar_df["Status"] == "🟠 Lower Price").sum()),
-            )
-            k3.metric(
-                "Consider Listing",
-                int((radar_df["Status"] == "🟡 Consider Listing").sum()),
-            )
-            k4.metric(
-                "Market Demand Only",
-                int((radar_df["Status"] == "🔵 Market Demand Only").sum()),
-            )
+            k1.metric("Items Checked", len(radar_df))
+            k2.metric("Lower Price", int((radar_df["Status"] == "🟠 Lower Price").sum()))
+            k3.metric("Consider Listing", int((radar_df["Status"] == "🟡 Consider Listing").sum()))
+            k4.metric("Market Demand Only", int((radar_df["Status"] == "🔵 Market Demand Only").sum()))
 
             st.subheader("Price Actions / Review Needed")
-
             st.dataframe(
                 radar_df[
-                    radar_df["Status"].isin(
-                        [
-                            "🟠 Lower Price",
-                            "🟢 Competitive",
-                            "🔴 Manual Review",
-                            "🔴 No Reliable Match",
-                        ]
-                    )
+                    radar_df["Status"].isin([
+                        "🟠 Lower Price",
+                        "🟢 Competitive",
+                        "🔴 Manual Review",
+                        "🔴 No Reliable Match",
+                    ])
                 ],
                 width="stretch",
             )
 
             st.subheader("Listing Opportunities")
-
             st.dataframe(
                 radar_df[
-                    radar_df["Status"].isin(
-                        [
-                            "🟡 Consider Listing",
-                            "🔵 Market Demand Only",
-                        ]
-                    )
+                    radar_df["Status"].isin([
+                        "🟡 Consider Listing",
+                        "🔵 Market Demand Only",
+                    ])
                 ],
                 width="stretch",
             )
 
             st.subheader("Full Browser AI Radar Dashboard")
-
-            st.dataframe(
-                radar_df,
-                width="stretch",
-            )
+            st.dataframe(radar_df, width="stretch")
 
             st.download_button(
                 "Download Browser AI Radar CSV",
@@ -1291,11 +1013,7 @@ if uploaded_file:
             )
 
             st.subheader("Competitor Search Detail Report")
-
-            st.dataframe(
-                detail_df,
-                width="stretch",
-            )
+            st.dataframe(detail_df, width="stretch")
 
             st.download_button(
                 "Download Detail CSV",
@@ -1308,8 +1026,9 @@ else:
     st.subheader("How to use")
     st.write(
         "1. Upload Google Ads Search Terms CSV. "
-        "2. Click Test Browser Agent first. "
-        "3. Click Test Watson's Wine Search. "
+        "2. Click Test OpenAI Connection. "
+        "3. Click Test Browser Agent. "
         "4. Click 1️⃣ Analyse Google Ads Terms. "
-        "5. Click 2️⃣ Run Browser AI Price Radar."
+        "5. Confirm AI Search Term Classification appears. "
+        "6. Click 2️⃣ Run Browser AI Price Radar."
     )
