@@ -23,10 +23,6 @@ st.caption(
 )
 
 
-# =========================
-# OpenAI
-# =========================
-
 def get_openai_client():
     try:
         return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -36,10 +32,6 @@ def get_openai_client():
 
 client = get_openai_client()
 
-
-# =========================
-# Search URLs
-# =========================
 
 ALCOHOOD_SEARCH_TEMPLATE = "https://www.alcohood.com/search?q={query}"
 
@@ -90,9 +82,6 @@ BAD_URL_KEYWORDS = [
     "faq",
     "collection/all",
     "collections/all",
-    "collections",
-    "category",
-    "categories",
 ]
 
 
@@ -133,20 +122,13 @@ STOPWORDS = {
 }
 
 
-# =========================
-# Web Helpers
-# =========================
-
 @st.cache_data(ttl=3600)
 def fetch(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=20)
-
         if response.status_code == 200:
             return response.text
-
         return ""
-
     except Exception:
         return ""
 
@@ -162,7 +144,6 @@ def normalize_text(text):
     text = str(text).lower()
     text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
-
     return text
 
 
@@ -173,10 +154,8 @@ def important_tokens(query):
     for token in text.split():
         if token in STOPWORDS:
             continue
-
         if len(token) <= 1:
             continue
-
         tokens.append(token)
 
     return tokens
@@ -200,11 +179,7 @@ def product_name_match_score(query, title, url=""):
 
 def is_bad_url(url):
     lowered = str(url).lower()
-
-    return any(
-        keyword.lower() in lowered
-        for keyword in BAD_URL_KEYWORDS
-    )
+    return any(keyword.lower() in lowered for keyword in BAD_URL_KEYWORDS)
 
 
 def is_likely_product_url(url):
@@ -213,10 +188,7 @@ def is_likely_product_url(url):
     if is_bad_url(lowered):
         return False
 
-    return any(
-        keyword.lower() in lowered
-        for keyword in GOOD_URL_KEYWORDS
-    )
+    return any(keyword.lower() in lowered for keyword in GOOD_URL_KEYWORDS)
 
 
 def money_to_float(text):
@@ -234,10 +206,8 @@ def money_to_float(text):
         for match in re.findall(pattern, text, re.I):
             try:
                 price = float(str(match).replace(",", ""))
-
                 if 20 <= price <= 100000:
                     prices.append(price)
-
             except Exception:
                 pass
 
@@ -245,10 +215,7 @@ def money_to_float(text):
 
 
 def extract_json_ld_price(soup):
-    scripts = soup.find_all(
-        "script",
-        type="application/ld+json",
-    )
+    scripts = soup.find_all("script", type="application/ld+json")
 
     for script in scripts:
         try:
@@ -289,7 +256,6 @@ def extract_meta_title(soup, fallback_url):
 
     for attr, value in meta_properties:
         tag = soup.find("meta", attrs={attr: value})
-
         if tag and tag.get("content"):
             title_candidates.append(tag.get("content").strip())
 
@@ -359,24 +325,18 @@ def extract_page_info(url, product_query=None):
     text_price = money_to_float(page_text)
     price = json_price if json_price else text_price
 
-    match_score = product_name_match_score(
-        product_query or "",
-        title,
-        url,
-    )
-
+    match_score = product_name_match_score(product_query or "", title, url)
     valid_product_page = is_likely_product_url(url)
 
-    if product_query:
-        if match_score < 0.5:
-            return {
-                "price": None,
-                "title": title,
-                "url": url,
-                "match_score": match_score,
-                "valid_product_page": valid_product_page,
-                "reason": "Product name does not match search term",
-            }
+    if product_query and match_score < 0.5:
+        return {
+            "price": None,
+            "title": title,
+            "url": url,
+            "match_score": match_score,
+            "valid_product_page": valid_product_page,
+            "reason": "Product name does not match search term",
+        }
 
     if not valid_product_page:
         return {
@@ -411,7 +371,6 @@ def extract_page_info(url, product_query=None):
 def search_product_from_site(product_query, search_template, allowed_domain=None):
     search_url = build_search_url(search_template, product_query)
     html = fetch(search_url)
-
     debug_rows = []
 
     if not html:
@@ -438,14 +397,16 @@ def search_product_from_site(product_query, search_template, allowed_domain=None
             product_query=product_query,
         )
 
-        debug_rows.append({
-            "Candidate URL": link,
-            "Title": result.get("title"),
-            "Price": result.get("price"),
-            "Match Score": result.get("match_score"),
-            "Valid Product Page": result.get("valid_product_page"),
-            "Reason": result.get("reason"),
-        })
+        debug_rows.append(
+            {
+                "Candidate URL": link,
+                "Title": result.get("title"),
+                "Price": result.get("price"),
+                "Match Score": result.get("match_score"),
+                "Valid Product Page": result.get("valid_product_page"),
+                "Reason": result.get("reason"),
+            }
+        )
 
         if result.get("price"):
             best_valid = result
@@ -509,10 +470,6 @@ def search_competitor_product(product_query, competitor_name):
     }
 
 
-# =========================
-# AI Helpers
-# =========================
-
 def safe_json_loads(text):
     try:
         return json.loads(text)
@@ -563,18 +520,11 @@ Return JSON only:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
 
-        data = safe_json_loads(
-            response.choices[0].message.content
-        )
+        data = safe_json_loads(response.choices[0].message.content)
 
         return {
             "type": data.get("type", "IGNORE"),
@@ -663,18 +613,11 @@ Return JSON only:
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
 
-        data = safe_json_loads(
-            response.choices[0].message.content
-        )
+        data = safe_json_loads(response.choices[0].message.content)
 
         same_sku = bool(data.get("same_sku", False))
         confidence = int(data.get("confidence", 0) or 0)
@@ -708,15 +651,8 @@ Return JSON only:
         }
 
 
-# =========================
-# Google Ads CSV Handling
-# =========================
-
 def find_column(df, possible_names):
-    lower_map = {
-        str(col).lower().strip(): col
-        for col in df.columns
-    }
+    lower_map = {str(col).lower().strip(): col for col in df.columns}
 
     for name in possible_names:
         if name.lower() in lower_map:
@@ -819,10 +755,7 @@ def clean_number(value):
     text = text.replace("%", "")
     text = text.strip()
 
-    number_match = re.search(
-        r"-?\d+(?:\.\d+)?",
-        text,
-    )
+    number_match = re.search(r"-?\d+(?:\.\d+)?", text)
 
     if not number_match:
         return 0
@@ -911,14 +844,8 @@ def load_google_ads_csv(uploaded_file):
         else 0
     )
 
-    clean_df = clean_df.dropna(
-        subset=["Search Term"]
-    )
-
-    clean_df = clean_df[
-        clean_df["Search Term"].str.strip() != ""
-    ]
-
+    clean_df = clean_df.dropna(subset=["Search Term"])
+    clean_df = clean_df[clean_df["Search Term"].str.strip() != ""]
     clean_df = clean_df[
         ~clean_df["Search Term"].str.contains(
             "Total|總計|已移除",
@@ -927,9 +854,7 @@ def load_google_ads_csv(uploaded_file):
         )
     ]
 
-    clean_df = clean_df.drop_duplicates(
-        subset=["Search Term"]
-    )
+    clean_df = clean_df.drop_duplicates(subset=["Search Term"])
 
     return clean_df
 
@@ -937,10 +862,7 @@ def load_google_ads_csv(uploaded_file):
 def classify_ads_terms(ads_df, max_terms):
     rows = []
 
-    working_df = ads_df.sort_values(
-        by="Clicks",
-        ascending=False,
-    ).head(max_terms)
+    working_df = ads_df.sort_values(by="Clicks", ascending=False).head(max_terms)
 
     for _, row in working_df.iterrows():
         term = row["Search Term"]
@@ -964,23 +886,13 @@ def classify_ads_terms(ads_df, max_terms):
     return pd.DataFrame(rows)
 
 
-# =========================
-# Price Radar
-# =========================
-
 def build_price_radar(product_df, selected_competitors):
     main_rows = []
     detail_rows = []
     debug_rows = []
 
     product_rows = product_df[
-        product_df["AI Type"].isin(
-            [
-                "PRODUCT",
-                "BRAND",
-                "GENERIC",
-            ]
-        )
+        product_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
     ]
 
     for _, row in product_rows.iterrows():
@@ -995,30 +907,30 @@ def build_price_radar(product_df, selected_competitors):
         own_price = own.get("alcohood_price")
 
         for debug in own.get("debug", []):
-            debug_rows.append({
-                "Site": "Alcohood",
-                "Search Term": search_term,
-                "Product Query": product_query,
-                **debug,
-            })
+            debug_rows.append(
+                {
+                    "Site": "Alcohood",
+                    "Search Term": search_term,
+                    "Product Query": product_query,
+                    **debug,
+                }
+            )
 
         competitor_results = []
 
         for competitor_name in selected_competitors:
-            result = search_competitor_product(
-                product_query,
-                competitor_name,
-            )
-
+            result = search_competitor_product(product_query, competitor_name)
             competitor_results.append(result)
 
             for debug in result.get("debug", []):
-                debug_rows.append({
-                    "Site": competitor_name,
-                    "Search Term": search_term,
-                    "Product Query": product_query,
-                    **debug,
-                })
+                debug_rows.append(
+                    {
+                        "Site": competitor_name,
+                        "Search Term": search_term,
+                        "Product Query": product_query,
+                        **debug,
+                    }
+                )
 
             detail_rows.append(
                 {
@@ -1037,16 +949,11 @@ def build_price_radar(product_df, selected_competitors):
             time.sleep(0.4)
 
         valid_competitors = [
-            item
-            for item in competitor_results
-            if item.get("competitor_price")
+            item for item in competitor_results if item.get("competitor_price")
         ]
 
         cheapest = (
-            sorted(
-                valid_competitors,
-                key=lambda x: x["competitor_price"],
-            )[0]
+            sorted(valid_competitors, key=lambda x: x["competitor_price"])[0]
             if valid_competitors
             else {}
         )
@@ -1129,26 +1036,15 @@ def build_price_radar(product_df, selected_competitors):
 
         time.sleep(0.4)
 
-    return (
-        pd.DataFrame(main_rows),
-        pd.DataFrame(detail_rows),
-        pd.DataFrame(debug_rows),
-    )
+    return pd.DataFrame(main_rows), pd.DataFrame(detail_rows), pd.DataFrame(debug_rows)
 
-
-# =========================
-# Sidebar
-# =========================
 
 with st.sidebar:
     st.header("Settings")
 
     uploaded_file = st.file_uploader(
         "Upload Google Ads Search Terms CSV",
-        type=[
-            "csv",
-            "txt",
-        ],
+        type=["csv", "txt"],
     )
 
     selected_competitors = st.multiselect(
@@ -1184,10 +1080,6 @@ with st.sidebar:
     )
 
 
-# =========================
-# Main UI
-# =========================
-
 st.info(
     "Upload your Google Ads Search Terms CSV. AI will classify real customer searches into PRODUCT, BRAND, COMPETITOR, GENERIC, or IGNORE. "
     "This version filters out non-product pages such as delivery, shipping, collections, blog, and cart pages before using any price."
@@ -1209,9 +1101,7 @@ if test_ai:
                 ],
                 temperature=0,
             )
-            st.success(
-                response.choices[0].message.content
-            )
+            st.success(response.choices[0].message.content)
         except Exception as error:
             st.error(f"OpenAI test failed: {error}")
 
@@ -1221,17 +1111,11 @@ if uploaded_file:
 
     if not ads_df.empty:
         st.subheader("Uploaded Google Ads Search Terms")
-        st.dataframe(
-            ads_df.head(50),
-            width="stretch",
-        )
+        st.dataframe(ads_df.head(50), width="stretch")
 
         if run_classification:
             with st.spinner("AI is classifying Google Ads search terms..."):
-                classified_df = classify_ads_terms(
-                    ads_df,
-                    max_terms,
-                )
+                classified_df = classify_ads_terms(ads_df, max_terms)
 
             st.session_state["classified_df"] = classified_df
 
@@ -1240,10 +1124,7 @@ if uploaded_file:
 
             st.subheader("AI Search Term Classification")
 
-            st.dataframe(
-                classified_df,
-                width="stretch",
-            )
+            st.dataframe(classified_df, width="stretch")
 
             st.download_button(
                 "Download AI Classification CSV",
@@ -1254,43 +1135,19 @@ if uploaded_file:
 
             c1, c2, c3, c4, c5 = st.columns(5)
 
-            c1.metric(
-                "PRODUCT",
-                int((classified_df["AI Type"] == "PRODUCT").sum()),
-            )
-            c2.metric(
-                "BRAND",
-                int((classified_df["AI Type"] == "BRAND").sum()),
-            )
-            c3.metric(
-                "COMPETITOR",
-                int((classified_df["AI Type"] == "COMPETITOR").sum()),
-            )
-            c4.metric(
-                "GENERIC",
-                int((classified_df["AI Type"] == "GENERIC").sum()),
-            )
-            c5.metric(
-                "IGNORE",
-                int((classified_df["AI Type"] == "IGNORE").sum()),
-            )
+            c1.metric("PRODUCT", int((classified_df["AI Type"] == "PRODUCT").sum()))
+            c2.metric("BRAND", int((classified_df["AI Type"] == "BRAND").sum()))
+            c3.metric("COMPETITOR", int((classified_df["AI Type"] == "COMPETITOR").sum()))
+            c4.metric("GENERIC", int((classified_df["AI Type"] == "GENERIC").sum()))
+            c5.metric("IGNORE", int((classified_df["AI Type"] == "IGNORE").sum()))
 
             st.subheader("Product Terms Selected for Price Radar")
 
             product_terms_df = classified_df[
-                classified_df["AI Type"].isin(
-                    [
-                        "PRODUCT",
-                        "BRAND",
-                        "GENERIC",
-                    ]
-                )
+                classified_df["AI Type"].isin(["PRODUCT", "BRAND", "GENERIC"])
             ]
 
-            st.dataframe(
-                product_terms_df,
-                width="stretch",
-            )
+            st.dataframe(product_terms_df, width="stretch")
 
             if run_price_radar:
                 with st.spinner("Searching Alcohood and competitors with product-page filtering..."):
@@ -1312,35 +1169,38 @@ if uploaded_file:
 
             k1, k2, k3, k4 = st.columns(4)
 
-            k1.metric(
-                "Items Checked",
-                len(radar_df),
-            )
-            k2.metric(
-                "Lower Price",
-                int((radar_df["Status"] == "🟠 Lower Price").sum()),
-            )
-            k3.metric(
-                "Consider Listing",
-                int((radar_df["Status"] == "🟡 Consider Listing").sum()),
-            )
-            k4.metric(
-                "Market Demand Only",
-                int((radar_df["Status"] == "🔵 Market Demand Only").sum()),
-            )
+            k1.metric("Items Checked", len(radar_df))
+            k2.metric("Lower Price", int((radar_df["Status"] == "🟠 Lower Price").sum()))
+            k3.metric("Consider Listing", int((radar_df["Status"] == "🟡 Consider Listing").sum()))
+            k4.metric("Market Demand Only", int((radar_df["Status"] == "🔵 Market Demand Only").sum()))
 
-            st.subheader("Price Actions")
-            st.dataframe(
-                radar_df[
-                    radar_df["Status"].isin(
-                        [
-                            "🟠 Lower Price",
-                            "🟢 Competitive",
-                        ]
-                    )
-                ],
-                width="stretch",
-            )
+            st.subheader("Price Actions / Review Needed")
+
+            price_actions_df = radar_df[
+                radar_df["Status"].isin(
+                    [
+                        "🟠 Lower Price",
+                        "🟢 Competitive",
+                        "🔴 No Reliable Match",
+                    ]
+                )
+            ]
+
+            st.dataframe(price_actions_df, width="stretch")
+
+            st.subheader("All Items Needing Review")
+
+            review_df = radar_df[
+                radar_df["Status"].isin(
+                    [
+                        "🔴 No Reliable Match",
+                        "🔵 Market Demand Only",
+                        "🟡 Consider Listing",
+                    ]
+                )
+            ]
+
+            st.dataframe(review_df, width="stretch")
 
             st.subheader("Listing Opportunities")
             st.dataframe(
@@ -1356,10 +1216,7 @@ if uploaded_file:
             )
 
             st.subheader("Full Radar Dashboard")
-            st.dataframe(
-                radar_df,
-                width="stretch",
-            )
+            st.dataframe(radar_df, width="stretch")
 
             st.download_button(
                 "Download Full Radar CSV",
@@ -1369,10 +1226,7 @@ if uploaded_file:
             )
 
             st.subheader("Competitor Detail Report")
-            st.dataframe(
-                detail_df,
-                width="stretch",
-            )
+            st.dataframe(detail_df, width="stretch")
 
             st.download_button(
                 "Download Competitor Detail CSV",
@@ -1386,10 +1240,7 @@ if uploaded_file:
                 "Use this table to see why a page was rejected, e.g. not product URL, no price found, or product name mismatch."
             )
 
-            st.dataframe(
-                debug_df,
-                width="stretch",
-            )
+            st.dataframe(debug_df, width="stretch")
 
             st.download_button(
                 "Download Debug CSV",
@@ -1406,5 +1257,5 @@ else:
         "3. Click 1️⃣ Analyse Google Ads Terms. "
         "4. Review AI classification. "
         "5. Click 2️⃣ Run Price & Listing Radar. "
-        "6. Check Price Actions, Listing Opportunities, and Debug table."
+        "6. Check Price Actions / Review Needed, Listing Opportunities, and Debug table."
     )
